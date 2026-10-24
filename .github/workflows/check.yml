@@ -1,0 +1,53 @@
+name: check-year
+# 取得済みの年(他の run の artifact)だけで DB を作り、解析エラーを確認する。公式サイトにはアクセスしない。
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "fetch を実行中/実行済みの run id"
+      year:
+        description: "確認する年"
+permissions:
+  contents: write
+  actions: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: raw-${{ inputs.year }}
+          path: raw
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - run: pip install lhafile
+      - run: python3 build_db.py --raw raw --db check.sqlite
+      - run: |
+          python3 - <<'PY' > check.txt
+          import sqlite3
+          c = sqlite3.connect("check.sqlite")
+          for q in ["select min(race_date),max(race_date),count(*) from races",
+                    "select count(*), sum(technique is null), sum(weather is null), sum(meeting_title is null), sum(day_no is null), sum(deadline is null) from races",
+                    "select count(*), sum(racer_no is null), sum(exhibition_time is null), sum(course is null), sum(start_timing is null) from results",
+                    "select count(*), sum(class is null), sum(nat_win_rate is null), sum(motor_no is null), sum(boat_2_rate is null) from entries",
+                    "select bet_type, count(*) from payouts group by 1",
+                    "select count(*) from races r where not exists (select 1 from results x where x.race_id=r.race_id)",
+                    "select substr(reason,1,15), count(*) from parse_issues group by 1",
+                    "select * from parse_issues limit 40",
+                    "select * from races limit 3", "select * from results limit 8", "select * from entries limit 8",
+                    "select * from payouts limit 12"]:
+              print("##", q)
+              for r in c.execute(q): print(r)
+          PY
+          python3 - <<'PY' >> check.txt
+          import glob, lhafile
+          for kind in ("K", "B"):
+              p = sorted(glob.glob(f"raw/{kind}/*/*.lzh"))[100]
+              lf = lhafile.Lhafile(p)
+              t = lf.read(lf.infolist()[0].filename).decode("cp932", "replace")
+              print("#### SAMPLE", p); print("\n".join(t.splitlines()[:90]))
+          PY
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "check-${{ inputs.year }}-$(date +%s)" check.txt --title "check ${{ inputs.year }}" --notes "parse check" --prerelease
