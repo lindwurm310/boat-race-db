@@ -74,9 +74,10 @@ jobs:
             select count(*) from results; select count(*) from entries; select count(*) from payouts;
             select reason, count(*) from parse_issues group by substr(reason,1,15) order by 2 desc limit 20;" | tee summary.txt
           gzip -k -9 boatrace.sqlite
+          tar cf raw.tar raw
       - name: publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="db-$(date -u +%Y%m%d-%H%M)"
-          gh release create "$TAG" boatrace.sqlite.gz summary.txt --title "$TAG" --notes-file summary.txt
+          gh release create "$TAG" boatrace.sqlite.gz raw.tar summary.txt --title "$TAG" --notes-file summary.txt
