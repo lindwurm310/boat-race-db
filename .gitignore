@@ -1,0 +1,4 @@
+raw/
+*.sqlite
+*.sqlite.gz
+__pycache__/

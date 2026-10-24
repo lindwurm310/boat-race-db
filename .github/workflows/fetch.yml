@@ -1,0 +1,82 @@
+name: fetch-and-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: "開始年"
+        default: "2025"
+      end_year:
+        description: "終了年"
+        default: "2026"
+      start_date:
+        description: "開始日 (空なら start_year の1/1)"
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  years:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.y.outputs.list }}
+    steps:
+      - id: y
+        run: echo "list=$(python3 -c "import json;print(json.dumps(list(range(${{ inputs.start_year }}, ${{ inputs.end_year }}+1))))")" >> "$GITHUB_OUTPUT"
+
+  fetch:
+    needs: years
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      max-parallel: 2   # 公式サイトへの負荷を抑える
+      fail-fast: false
+      matrix:
+        year: ${{ fromJson(needs.years.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: restore raw cache
+        uses: actions/cache@v4
+        with:
+          path: raw
+          key: raw-${{ matrix.year }}-${{ github.run_id }}
+          restore-keys: raw-${{ matrix.year }}-
+      - name: download
+        run: |
+          S="${{ inputs.start_date }}"
+          if [ -z "$S" ] || [ "${S:0:4}" != "${{ matrix.year }}" ]; then S="${{ matrix.year }}-01-01"; fi
+          E="${{ matrix.year }}-12-31"
+          Y=$(date -u -d yesterday +%F); if [[ "$E" > "$Y" ]]; then E="$Y"; fi
+          python3 fetch.py --kind K B --start "$S" --end "$E" --out raw --interval 1.0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: raw-${{ matrix.year }}
+          path: raw
+          retention-days: 30
+
+  build:
+    needs: fetch
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: raw-*
+          path: raw
+          merge-multiple: true
+      - run: pip install lhafile
+      - run: python3 build_db.py --raw raw --db boatrace.sqlite
+      - name: summary
+        run: |
+          sqlite3 boatrace.sqlite "select min(race_date),max(race_date),count(*) from races;
+            select count(*) from results; select count(*) from entries; select count(*) from payouts;
+            select reason, count(*) from parse_issues group by substr(reason,1,15) order by 2 desc limit 20;" | tee summary.txt
+          gzip -k -9 boatrace.sqlite
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="db-$(date -u +%Y%m%d-%H%M)"
+          gh release create "$TAG" boatrace.sqlite.gz summary.txt --title "$TAG" --notes-file summary.txt
