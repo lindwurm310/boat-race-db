@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS entries (  -- 番組表(B)の出走表
   branch TEXT, weight INTEGER, class TEXT,
   nat_win_rate REAL, nat_2_rate REAL, loc_win_rate REAL, loc_2_rate REAL,
   motor_no INTEGER, motor_2_rate REAL, boat_no INTEGER, boat_2_rate REAL,
-  series_results TEXT,
+  series_results TEXT,             -- 今節成績 (着順の並び)
+  early_race INTEGER,               -- 早見
   PRIMARY KEY (race_id, lane)
 );
 CREATE TABLE IF NOT EXISTS parse_issues (file TEXT, line TEXT, reason TEXT);
@@ -88,6 +89,25 @@ def race_id(date, jcd, rno):
     return f"{date.replace('-', '')}-{jcd:02d}-{rno:02d}"
 
 
+def parse_header(lines, word):
+    """場名・開催タイトル・日次をブロック冒頭から取る。"""
+    nonblank = [l for l in lines if l.strip()]
+    venue = title = day_no = None
+    if nonblank:
+        head = clean(nonblank[0])
+        m = re.match(r"^(?:ボートレース)?(.+?)\s*(?:\[成績\]|\s{2,})", head)
+        if m:
+            venue = m.group(1).replace(" ", "")
+        days = re.findall(r"第\s*(\d+)\s*日", head)  # タイトルにも「第」が入るので最後の一致
+        if days:
+            day_no = int(days[-1])
+    for i, l in enumerate(nonblank):
+        if word in l and "＊＊＊" in l and i + 1 < len(nonblank):
+            title = clean(nonblank[i + 1])
+            break
+    return venue, title, day_no
+
+
 # ---------------- 競走成績 (K) ----------------
 RE_K_RACE = re.compile(
     r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m\s+(\S+)\s+風\s+(\S+)\s+(\d+)m\s+波\s+(\d+)cm")
@@ -98,20 +118,7 @@ RE_DAY = re.compile(r"第\s*(\S+)\s*日")
 
 def parse_k(date, jcd, body, issues):
     lines = body.splitlines()
-    head = clean(lines[0]) if lines else ""
-    title = None
-    m = re.match(r"^\S+\s*\[成績\]\s+\S+\s+(.*?)\s+第\s*\d+\s*日", head)
-    if m:
-        title = m.group(1).strip()
-    venue = None
-    m = re.match(r"^(.+?)\s*\[成績\]", head)
-    if m:
-        venue = m.group(1).replace(" ", "")
-    day_no = None
-    m = RE_DAY.search(head)
-    if m:
-        day_no = num(m.group(1))
-
+    venue, title, day_no = parse_header(lines, "成績")
     races, results, payouts = [], [], []
     cur = None
     bet = None
@@ -156,6 +163,12 @@ def parse_k(date, jcd, body, issues):
         else:
             if bet is None:
                 continue
+        if "不成立" in s:
+            continue
+        sp = re.match(r"\s*特払い\s+(\d+)", s)
+        if sp:
+            payouts.append((cur, bet, "特払い", int(sp.group(1)), None))
+            continue
         found = RE_PAY.findall(s)
         if found:
             for combo, pay, pop in found:
@@ -165,59 +178,62 @@ def parse_k(date, jcd, body, issues):
     return venue, races, results, payouts
 
 
+def fixed(raw, *cuts):
+    """cp932 のバイト位置で切り出す (公式ファイルは全角=2バイトの固定長)。"""
+    b = raw.encode("cp932", errors="replace")
+    return [b[i:j].decode("cp932", errors="replace") for i, j in cuts]
+
+
+def racer_name(s):
+    """'山　本　　浩　輔' / '山本浩輔' → '山本 浩輔' (姓名の区切りは全角空白2つ以上)。"""
+    s = s.replace("\u3000", " ").strip()
+    parts = [p.replace(" ", "") for p in re.split(r" {2,}", s) if p.strip()]
+    return " ".join(parts)
+
+
+def text_or_none(s):
+    s = z2h(s).strip()
+    return s if re.search(r"\d", s) else None
+
+
 def parse_k_row(rid, raw, issues):
-    # 着 艇 登番 選手名(全角) | モーター ボート 展示 進入 ST タイム
-    # 選手名は全角空白混じりなので、ASCII空白で区切って名前より後ろを数値列として読む
-    m = re.match(r"^\s*(\S+)\s+([1-6])\s+(\d{4})\s(.*)$", raw)
-    finish_raw, lane, racer_no, rest = m.groups()
-    toks = [t for t in rest.split(" ") if t]  # 名前は全角なので ASCII 空白では切れない
-    name = toks[0] if toks else ""
-    nums = toks[1:]
-    motor = boat = course = None
-    exh = st = rtime = None
-    if len(nums) >= 2:
-        motor, boat = num(nums[0]), num(nums[1])
-    if len(nums) >= 3:
-        exh = num(nums[2], float)
-    if len(nums) >= 4:
-        course = num(nums[3])
-    if len(nums) >= 5:
-        st = nums[4]
-    if len(nums) >= 6:
-        rtime = nums[5]
-    fr = z2h(finish_raw)
-    return (rid, int(lane), int(racer_no), clean(name), motor, boat, exh, course, st, rtime,
-            fr, int(fr) if fr.isdigit() else None)
+    fin, lane, reg, name, motor, boat, exh, course, st, rtime = fixed(
+        raw, (2, 4), (6, 7), (8, 12), (13, 29), (29, 32), (32, 37), (37, 43), (43, 47), (47, 55), (55, 70))
+    fr = z2h(fin).strip()
+    return (rid, int(lane), int(reg), racer_name(name), num(motor), num(boat), num(exh, float), num(course),
+            text_or_none(st), text_or_none(rtime), fr, int(fr) if fr.isdigit() else None)
 
 
 # ---------------- 番組表 (B) ----------------
 RE_B_RACE = re.compile(r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m(?:.*?(\d{1,2}:\d{2}))?")
-RE_B_ROW = re.compile(
-    r"^([1-6]) (\d{4})(.{4})(\d{2})(.{2})(\d{2})([AB][12])\s*"
-    r"([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s?(.*)$")
+B_COLS = [(0, 1), (2, 6), (6, 14), (14, 16), (16, 20), (20, 22), (22, 24), (24, 29), (29, 35), (35, 40),
+          (40, 46), (46, 49), (49, 55), (55, 58), (58, 64), (65, 77), (77, 79)]
 
 
 def parse_b(date, jcd, body, issues):
     races, entries = [], []
     cur = None
-    for raw in body.splitlines():
+    lines = body.splitlines()
+    _, title, day_no = parse_header(lines, "番組表")
+    for raw in lines:
         line = z2h(raw).replace("　", " ")
         m = RE_B_RACE.match(line)
         if m:
             rno = int(m.group(1))
             cur = race_id(date, jcd, rno)
-            races.append((cur, date, jcd, rno, m.group(2).strip(), int(m.group(3)), m.group(4)))
+            races.append((cur, date, jcd, rno, m.group(2).strip(), int(m.group(3)), m.group(4), title, day_no))
             continue
         if cur is None:
             continue
-        m = RE_B_ROW.match(raw)
-        if m:
-            g = m.groups()
-            entries.append((cur, int(g[0]), int(g[1]), clean(g[2]), num(g[3]), clean(g[4]), num(g[5]),
-                            g[6], num(g[7], float), num(g[8], float), num(g[9], float), num(g[10], float),
-                            num(g[11]), num(g[12], float), num(g[13]), num(g[14], float), g[15].rstrip()))
-        elif re.match(r"^[1-6] \d{4}", raw):
-            issues.append((None, raw, f"entry-unparsed {cur}"))
+        if re.match(r"^[1-6] \d{4}", raw):
+            try:
+                g = fixed(raw, *B_COLS)
+                entries.append((cur, int(g[0]), int(g[1]), racer_name(g[2]), num(g[3]), clean(g[4]), num(g[5]),
+                                g[6].strip(), num(g[7], float), num(g[8], float), num(g[9], float),
+                                num(g[10], float), num(g[11]), num(g[12], float), num(g[13]), num(g[14], float),
+                                z2h(g[15]).rstrip(), num(g[16])))
+            except ValueError:
+                issues.append((None, raw, f"entry-unparsed {cur}"))
     return races, entries
 
 
@@ -257,11 +273,12 @@ def load_file(con, path, kind):
                 races, entries = parse_b(date, jcd, body, issues)
                 for r in races:
                     con.execute(
-                        """INSERT INTO races (race_id,race_date,jcd,rno,program_title,distance,deadline)
-                           VALUES (?,?,?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET
-                           program_title=excluded.program_title, deadline=excluded.deadline""",
-                        (r[0], r[1], r[2], r[3], r[4], r[5], r[6]))
-                con.executemany("INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        """INSERT INTO races (race_id,race_date,jcd,rno,program_title,distance,deadline,
+                           meeting_title,day_no) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(race_id) DO UPDATE SET
+                           program_title=excluded.program_title, deadline=excluded.deadline,
+                           meeting_title=coalesce(races.meeting_title, excluded.meeting_title),
+                           day_no=coalesce(races.day_no, excluded.day_no)""", r)
+                con.executemany("INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 entries)
                 nraces += len(races)
     con.executemany("INSERT INTO parse_issues VALUES (?,?,?)", [(name, l, r) for _, l, r in issues])
