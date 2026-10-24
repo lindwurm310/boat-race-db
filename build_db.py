@@ -54,7 +54,8 @@ CREATE INDEX IF NOT EXISTS ix_entries_racer ON entries(racer_no);
 CREATE INDEX IF NOT EXISTS ix_payouts_race ON payouts(race_id);
 """
 
-BET_TYPES = ["単勝", "複勝", "２連単", "２連複", "拡連複", "３連単", "３連複"]
+BET_TYPES = ["単勝", "複勝", "２連単", "２連複", "拡連複", "３連単", "３連複", "連単", "連複"]
+BET_ALIAS = {"連単": "２連単", "連複": "２連複"}  # 2001年頃までの表記
 
 
 def z2h(s):
@@ -64,6 +65,10 @@ def z2h(s):
 
 def clean(s):
     return z2h(s).replace("　", " ").strip() if s is not None else None
+
+
+def nospace(s):
+    return re.sub(r"\s+", "", s) if s else s
 
 
 def num(s, f=int):
@@ -109,8 +114,9 @@ def parse_header(lines, word):
 
 
 # ---------------- 競走成績 (K) ----------------
+# 古いファイルは天候が「は れ」、風向が「無 風」のように空白を含む
 RE_K_RACE = re.compile(
-    r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m\s+(\S+)\s+風\s+(\S+)\s+(\d+)m\s+波\s+(\d+)cm")
+    r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m\s+(.+?)\s+風\s+(.+?)\s+(\d+)m\s+波\s+(\d+)cm")
 RE_K_ROW = re.compile(r"^\s{1,3}(\S{1,2})\s+([1-6])\s+(\d{4})\s(.+)$")
 RE_PAY = re.compile(r"(\d(?:-\d){0,2})\s+(\d+)(?:\s+人気\s+(\d+))?")
 RE_DAY = re.compile(r"第\s*(\S+)\s*日")
@@ -130,8 +136,8 @@ def parse_k(date, jcd, body, issues):
             rno = int(m.group(1))
             cur = race_id(date, jcd, rno)
             races.append(dict(race_id=cur, race_date=date, jcd=jcd, rno=rno, meeting_title=title,
-                              day_no=day_no, race_type=m.group(2).strip(), distance=int(m.group(3)),
-                              weather=m.group(4), wind_dir=m.group(5), wind_speed=int(m.group(6)),
+                              day_no=day_no, race_type=nospace(m.group(2)), distance=int(m.group(3)),
+                              weather=nospace(m.group(4)), wind_dir=nospace(m.group(5)), wind_speed=int(m.group(6)),
                               wave_cm=int(m.group(7)), technique=None))
             in_rows, bet = False, None
             continue
@@ -151,13 +157,18 @@ def parse_k(date, jcd, body, issues):
                 results.append(parse_k_row(cur, raw, issues))
                 continue
             in_rows = False
-        # 払戻
+        # 払戻 (古い形式では決まり手が連複の行末にある)
+        if "決まり手" in line:
+            t = re.search(r"決まり手\s+(\S+)", line)
+            if t:
+                races[-1]["technique"] = t.group(1)
+            line = line[:line.index("決まり手")]
         s = line.strip()
         if not s:
             continue
         for b in BET_TYPES:
             if s.startswith(z2h(b)):
-                bet = b
+                bet = BET_ALIAS.get(b, b)
                 s = s[len(z2h(b)):]
                 break
         else:
@@ -221,7 +232,7 @@ def parse_b(date, jcd, body, issues):
         if m:
             rno = int(m.group(1))
             cur = race_id(date, jcd, rno)
-            races.append((cur, date, jcd, rno, m.group(2).strip(), int(m.group(3)), m.group(4), title, day_no))
+            races.append((cur, date, jcd, rno, nospace(m.group(2)), int(m.group(3)), m.group(4), title, day_no))
             continue
         if cur is None:
             continue
