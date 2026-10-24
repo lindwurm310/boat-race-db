@@ -116,7 +116,7 @@ def parse_header(lines, word):
 # ---------------- 競走成績 (K) ----------------
 # 古いファイルは天候が「は れ」、風向が「無 風」のように空白を含む
 RE_K_RACE = re.compile(
-    r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m\s+(.+?)\s+風\s+(.+?)\s+(\d+)m\s+波\s+(\d+)cm")
+    r"^\s*(\d{1,2})R\s+(.*?)\s+H(\d{3,4})m\s+(.+?)\s+風\s+(.+?)\s*(\d+)m\s+波\s+(\d+)cm")
 RE_K_ROW = re.compile(r"^\s{1,3}(\S{1,2})\s+([1-6])\s+(\d{4})\s(.+)$")
 RE_PAY = re.compile(r"(\d(?:-\d){0,2})\s+(\d+)(?:\s+人気\s+(\d+))?")
 RE_DAY = re.compile(r"第\s*(\S+)\s*日")
