@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
-      max-parallel: 2   # 公式サイトへの負荷を抑える
+      max-parallel: 4   # 公式サイトへの負荷を抑える (1件あたり約10秒かかるので実効は毎秒0.4件程度)
       fail-fast: false
       matrix:
         year: ${{ fromJson(needs.years.outputs.list) }}

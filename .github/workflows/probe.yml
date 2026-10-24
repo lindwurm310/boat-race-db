@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for y in 1998 1999 2000 2001 2002 2003 2004 2005; do for m in 01 04 07 10; do for k in K B; do
+          for y in 1990 1992 1994 1995 1996 1997; do for m in 01 07; do for k in K B; do
             kk=$(echo $k | tr KB kb); yy=${y:2:2}
             u="https://www1.mbrace.or.jp/od2/$k/$y$m/$kk$yy${m}15.lzh"
             r=$(curl -s -o /dev/null -m 20 -w '%{http_code} %{size_download} %{time_total}' "$u")
