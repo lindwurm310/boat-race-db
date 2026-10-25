@@ -4,6 +4,7 @@ $ErrorActionPreference = "Continue"
 schtasks /Delete /F /TN "BoatRaceYosou\daily" 2>$null | Out-Null
 $desk = [Environment]::GetFolderPath("Desktop")
 Get-ChildItem $desk -Filter "ボートレース *.lnk" | Remove-Item -Force
+Remove-Item (Join-Path $desk "ボートレース予想サーバー.bat") -Force -ErrorAction SilentlyContinue
 Get-ChildItem ([Environment]::GetFolderPath("Startup")) -Filter "ボートレース *.lnk" | Remove-Item -Force
 $path = [Environment]::GetEnvironmentVariable("Path", "User")
 [Environment]::SetEnvironmentVariable("Path", (($path -split ";" | Where-Object { $_ -and $_ -ne $Dest }) -join ";"), "User")

@@ -6,6 +6,7 @@
 #byosou-panel .byosou-head { display: flex; gap: 6px; align-items: center; padding: 4px 8px; background: #1b3c78; color: #fff; border-radius: 5px 5px 0 0; }
 #byosou-panel .byosou-head span { flex: 1; font-weight: bold; font-size: 13px; }
 #byosou-panel .byosou-head button { border: 0; border-radius: 3px; padding: 1px 8px; cursor: pointer; background: #fff; color: #1b3c78; font: inherit; }
+#byosou-panel .byosou-head a { color: #fff; font-size: 12px; text-decoration: underline; }
 #byosou-panel .byosou-head button:disabled { opacity: .5; cursor: default; }
 #byosou-panel .byosou-body { padding: 8px; max-height: 70vh; overflow: auto; }
 #byosou-panel.byosou-folded .byosou-body { display: none; }

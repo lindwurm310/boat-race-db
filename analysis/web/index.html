@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ボートレース予想</title>
+<style>
+  :root { --navy: #1b3c78; --line: #d5dbe5; --bg: #f4f6fa; --red: #c62828; --green: #2e7d32; --muted: #667; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: #222; font: 14px/1.6 "Meiryo", "Hiragino Sans", sans-serif; }
+  header { background: var(--navy); color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .st { font-size: 12px; opacity: .85; }
+  nav { display: flex; gap: 2px; padding: 0 20px; background: #fff; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  nav button { border: 0; background: none; padding: 10px 14px; cursor: pointer; font: inherit; color: #333; border-bottom: 3px solid transparent; }
+  nav button.on { border-bottom-color: var(--navy); color: var(--navy); font-weight: bold; }
+  main { padding: 16px 20px 40px; max-width: 1400px; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .bar input[type=date], .bar input[type=text] { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+  .btn { font: inherit; padding: 5px 14px; border-radius: 4px; border: 1px solid var(--navy); background: var(--navy); color: #fff; cursor: pointer; }
+  .btn.sub { background: #fff; color: var(--navy); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin-bottom: 12px; }
+  .note { color: var(--muted); font-size: 12px; }
+  .err { color: var(--red); }
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; }
+  .kpi { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; min-width: 150px; }
+  .kpi b { display: block; font-size: 20px; }
+  .kpi span { font-size: 12px; color: var(--muted); }
+  .tw { overflow-x: auto; }
+  table { border-collapse: collapse; background: #fff; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 3px 6px; white-space: nowrap; text-align: center; }
+  th { background: #eef2f8; font-weight: normal; position: sticky; top: 0; }
+  tr.buy td { background: #fff3f3; }
+  td.l { text-align: left; }
+  .ok { color: var(--green); font-weight: bold; }
+  .ng { color: #999; }
+  .tag { display: inline-block; padding: 0 6px; border-radius: 3px; background: var(--red); color: #fff; font-weight: bold; }
+  pre { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 10px; white-space: pre-wrap; font: 13px/1.5 "MS Gothic", "Osaka-Mono", monospace; margin: 0 0 12px; }
+  #job { display: none; margin: 12px 20px 0; max-width: 1400px; }
+  #job.show { display: block; }
+  #job pre { max-height: 240px; overflow: auto; margin: 6px 0 0; }
+  .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--navy); border-right-color: transparent; border-radius: 50%; animation: s 1s linear infinite; vertical-align: middle; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  .lane { font-weight: bold; display: inline-block; width: 20px; border: 1px solid #999; }
+  .l1 { background: #fff; } .l2 { background: #000; color: #fff; } .l3 { background: #e60012; color: #fff; }
+  .l4 { background: #0068b7; color: #fff; } .l5 { background: #fff100; } .l6 { background: #00a33e; color: #fff; }
+  a { color: var(--navy); }
+</style>
+</head>
+<body>
+<header>
+  <h1>ボートレース予想</h1>
+  <div class="st" id="status">読み込み中…</div>
+</header>
+<nav id="tabs"></nav>
+<div id="job" class="card"></div>
+<main id="main"></main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const h = (tag, props = {}, ...kids) => {
+  const {dataset, ...rest} = props;
+  const e = Object.assign(document.createElement(tag), rest);
+  if (dataset) Object.assign(e.dataset, dataset);
+  kids.flat().forEach(k => k != null && e.append(k instanceof Node ? k : String(k)));
+  return e;
+};
+const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+const addDays = (d, n) => { const [y, m, dd] = d.split("-").map(Number); return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10); };
+const pct = v => v == null || v === "" || isNaN(v) ? "" : (v * 100).toFixed(1) + "%";
+const pct0 = v => v == null || v === "" || isNaN(v) ? "" : Math.round(v * 100) + "%";
+
+async function api(path) {
+  const r = await fetch(path);
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+async function run(cmd, date, extra = {}) {
+  const r = await fetch("/api/run", {method: "POST", headers: {"Content-Type": "application/json", "X-Yosou": "1"},
+    body: JSON.stringify({cmd, date, ...extra})});
+  const j = await r.json();
+  if (!r.ok) { alert(j.error); return; }
+  pollJob(true);
+}
+
+// ---------- 裏で動いている処理 ----------
+const JOBNAME = {predict: "予想", week: "1週間の予想", check: "答え合わせ", review: "先週の振り返り",
+  train: "学習", update: "データの取り込み", daily: "毎朝の処理", setup: "DBのダウンロード"};
+let jobTimer = null, jobWasRunning = false, dismissed = null;
+async function pollJob(force) {
+  let j;
+  try { j = await api("/api/job"); } catch { return; }
+  const box = $("#job");
+  if (!j.cmd || (!j.running && dismissed === j.started)) { box.className = "card"; return; }
+  box.className = "card show";
+  const name = JOBNAME[j.cmd] || j.cmd;
+  const pre = h("pre", {textContent: j.log || "(まだ出力がありません)"});
+  if (j.running) {
+    box.replaceChildren(h("div", {}, h("span", {className: "spin"}), ` ${name} (${j.date}) を実行中… 開始 ${j.started.slice(11)}`), pre);
+    pre.scrollTop = pre.scrollHeight;
+  } else {
+    box.replaceChildren(h("div", {className: "bar", style: "margin:0"},
+      j.error ? h("span", {className: "err"}, `${name}: ${j.error}`) : h("span", {className: "ok"}, `${name} (${j.date}) が終わりました`),
+      h("button", {className: "btn sub", textContent: "閉じる", onclick: () => { dismissed = j.started; box.className = "card"; }})),
+      h("details", {}, h("summary", {className: "note", textContent: "記録を見る"}), pre));
+  }
+  document.querySelectorAll("[data-run]").forEach(b => b.disabled = j.running);
+  if (j.running) {
+    jobWasRunning = true;
+    clearTimeout(jobTimer); jobTimer = setTimeout(pollJob, 2000);
+  } else if (jobWasRunning) {
+    jobWasRunning = false;
+    loadStatus(); show(current);  // 終わったら画面を新しくする
+  }
+}
+
+async function loadStatus() {
+  try {
+    const s = await api("/api/status");
+    $("#status").textContent = `データ: ${s.db ? (s.db_last || "?") + " まで" : "まだありません"}　` +
+      `モデル: ${s.model ? (s.trained || "?") + " までで学習" : "まだありません"}　学習に使う装置: ${s.device === "gpu" ? "GPU" : "CPU"}`;
+  } catch (e) { $("#status").textContent = "サーバーに繋がりません"; }
+}
+
+// ---------- 表 ----------
+function table(cols, rows, rowClass) {
+  const t = h("table");
+  t.append(h("tr", {}, cols.map(c => h("th", {textContent: c[0]}))));
+  rows.forEach(r => {
+    const tr = h("tr", {className: rowClass ? rowClass(r) : ""});
+    cols.forEach(([, f, cls]) => {
+      const v = typeof f === "function" ? f(r) : r[f];
+      tr.append(h("td", {className: cls || ""}, v instanceof Node ? v : (v == null ? "" : String(v))));
+    });
+    t.append(tr);
+  });
+  return h("div", {className: "tw"}, t);
+}
+const lane = n => h("span", {className: `lane l${n}`, textContent: n});
+const raceLink = (r, date) => {
+  const [, jcd, rno] = String(r.race_id).split("-");
+  const hd = (date || r["日付"] || "").replaceAll("-", "");
+  return h("a", {href: `https://www.boatrace.jp/owpc/pc/race/beforeinfo?rno=${+rno}&jcd=${jcd}&hd=${hd}`, target: "_blank",
+    textContent: "直前情報"});
+};
+const PRED_COLS = date => [
+  ["締切", "締切"], ["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命選手", "本命選手", "l"],
+  ["本命1着確率", r => pct0(r["本命1着確率"])], ["予想着順", "予想着順"], ["3連単上位5点", "3連単上位5点", "l"],
+  ["判断", "判断", "l"],
+  ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""],
+  ["期待値", "買い目の期待値"],
+  ["1", r => pct0(r["1号艇"])], ["2", r => pct0(r["2号艇"])], ["3", r => pct0(r["3号艇"])],
+  ["4", r => pct0(r["4号艇"])], ["5", r => pct0(r["5号艇"])], ["6", r => pct0(r["6号艇"])],
+  ["公式", r => raceLink(r, date)],
+];
+const buyRow = r => r["単勝買い目"] ? "buy" : "";
+
+// ---------- 各画面 ----------
+const PAGES = {
+  today: {title: "今日の予想", async render(el) {
+    const d = h("input", {type: "date", value: state.date || today()});
+    const only = h("input", {type: "checkbox", checked: !!state.only});
+    const out = h("div");
+    const load = async () => {
+      state.date = d.value; state.only = only.checked;
+      out.replaceChildren(h("div", {className: "note", textContent: "読み込み中…"}));
+      try {
+        const j = await api(`/api/predictions?date=${d.value}`);
+        let rows = j.rows;
+        const nbuy = rows.filter(r => r["単勝買い目"]).length;
+        if (only.checked) rows = rows.filter(r => r["単勝買い目"]);
+        out.replaceChildren(
+          h("p", {className: "note"}, `${j.rows.length}レース。単勝の買い目 (期待値1以上) があるのは ${nbuy}レース。` +
+            "「直前情報」を開くと、展示タイムと実際のオッズでの予想がページの右下に出ます。"),
+          table(PRED_COLS(d.value), rows, buyRow));
+      } catch (e) {
+        out.replaceChildren(h("p", {}, e.message, "。「予想する」を押してください (番組表は前日〜当日朝に公開されます)。"));
+      }
+    };
+    d.onchange = load; only.onchange = load;
+    el.append(h("div", {className: "bar"}, d,
+      h("button", {className: "btn", textContent: "予想する", dataset: {run: 1}, onclick: () => run("predict", d.value)}),
+      h("label", {}, only, " 買い目があるレースだけ")), out);
+    load();
+  }},
+
+  week: {title: "1週間の予想", async render(el) {
+    const d = h("input", {type: "date", value: today()});
+    const out = h("div");
+    const load = async () => {
+      try {
+        const j = await api(`/api/week?date=${d.value}`);
+        const days = [...new Set(j.rows.map(r => r["日付"]))];
+        out.replaceChildren(h("p", {className: "note"},
+          `${days.length}日分 ${j.rows.length}レース (${days.join("、")})。出走表は前日〜当日朝に公開されるので、ふつう予想できるのは今日と明日までです。残りの日は毎朝の自動実行でその日の朝に予想されます。`));
+        days.forEach(day => {
+          const rows = j.rows.filter(r => r["日付"] === day);
+          out.append(h("h3", {textContent: `${day}  (${rows.length}レース、単勝の買い目 ${rows.filter(r => r["単勝買い目"]).length})`}),
+            table(PRED_COLS(day), rows, buyRow));
+        });
+      } catch (e) { out.replaceChildren(h("p", {}, e.message, "。「1週間分を予想」を押してください。")); }
+    };
+    d.onchange = load;
+    el.append(h("div", {className: "bar"}, d, h("span", {textContent: "から7日分"}),
+      h("button", {className: "btn", textContent: "1週間分を予想", dataset: {run: 1}, onclick: () => run("week", d.value)})), out);
+    load();
+  }},
+
+  check: {title: "答え合わせ", async render(el) {
+    const d = h("input", {type: "date", value: state.checkDate || addDays(today(), -1)});
+    const out = h("div"), tot = h("div");
+    const load = async () => {
+      state.checkDate = d.value;
+      try {
+        const j = await api(`/api/check?date=${d.value}`);
+        const s = j.summary || {};
+        const kp = (label, v) => h("div", {className: "kpi"}, h("b", {textContent: v}), h("span", {textContent: label}));
+        out.replaceChildren(
+          h("div", {className: "kpis"},
+            kp("レース", j.rows.length), kp("本命の1着率", pct(s["本命1着率"])), kp("予想着順の的中率", pct(s["予想着順的中率"])),
+            kp("3連単上位5点の的中率", pct(s["三連単上位5点的中率"])), kp("3連単上位5点の回収率", pct(s["三連単上位5点回収率"])),
+            kp(`単勝の買い目 ${s["単勝期待値買い_点数"] ?? 0}点 回収率`, pct(s["単勝期待値買い_回収率"])),
+            kp(`直前の買い目 ${s["live買い_点数"] ?? 0}点 回収率`, pct(s["live買い_回収率"]))),
+          h("h3", {textContent: "レースごと"}),
+          table([["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命1着確率", r => pct0(r["本命1着確率"])],
+            ["予想着順", "予想着順"], ["結果", "結果"],
+            ["本命1着", r => r["本命1着"] === true || r["本命1着"] === "True" ? h("span", {className: "ok", textContent: "○"}) : h("span", {className: "ng", textContent: "×"})],
+            ["本命の着", "本命の着"], ["決まり手", "決まり手"], ["本命のST順位", "本命のST順位"], ["風速", "風速"], ["波", "波"],
+            ["3連単配当", "三連単配当"], ["単勝買い", "単勝点数"], ["単勝払戻", "単勝払戻"]], j.rows));
+      } catch (e) { out.replaceChildren(h("p", {}, e.message, "。「答え合わせ」を押してください (成績は翌日以降に公開されます)。")); }
+      try {
+        const t = await api("/api/totals");
+        tot.replaceChildren(h("h3", {textContent: "これまでの記録"}),
+          table([["日付", "date"], ["レース", "races"], ["本命1着率", r => pct(r["本命1着率"])], ["予想着順", r => pct(r["予想着順的中率"])],
+            ["3連単5点 的中", r => pct(r["三連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["三連単上位5点回収率"])],
+            ["単勝 点数", "単勝期待値買い_点数"], ["単勝 回収", r => pct(r["単勝期待値買い_回収率"])],
+            ["直前 点数", "live買い_点数"], ["直前 回収", r => pct(r["live買い_回収率"])]], t.rows.slice().reverse()));
+      } catch { tot.replaceChildren(); }
+    };
+    d.onchange = load;
+    el.append(h("div", {className: "bar"}, d,
+      h("button", {className: "btn", textContent: "答え合わせ", dataset: {run: 1}, onclick: () => run("check", d.value)})), out, tot);
+    load();
+  }},
+
+  review: {title: "先週の振り返り", async render(el) {
+    const d = h("input", {type: "date", value: today()});
+    const tr = h("input", {type: "checkbox"});
+    const out = h("div");
+    el.append(h("div", {className: "bar"}, d, h("span", {textContent: "の前日までの7日間を"}),
+      h("button", {className: "btn", textContent: "振り返る", dataset: {run: 1}, onclick: () => run("review", d.value, {train: tr.checked})}),
+      h("label", {}, tr, " そのあと学習し直す (40分〜1時間半)")),
+      h("p", {className: "note", textContent: "毎朝の自動実行を登録していれば、月曜に自動で振り返ります。"}), out);
+    try {
+      const j = await api("/api/reviews");
+      if (!j.items.length) out.append(h("p", {textContent: "振り返りはまだありません。「振り返る」を押してください。"}));
+      j.items.forEach((it, i) => {
+        const det = h("details", {open: i === 0}, h("summary", {textContent: it.text.split("\n")[0]}), h("pre", {textContent: it.text}));
+        out.append(det);
+      });
+    } catch (e) { out.append(h("p", {className: "err", textContent: e.message})); }
+  }},
+
+  racer: {title: "選手の成績", async render(el) {
+    const q = h("input", {type: "text", placeholder: "登録番号 または 名前", value: state.racerQ || ""});
+    const out = h("div");
+    const go = async () => {
+      state.racerQ = q.value;
+      out.replaceChildren(h("div", {className: "note", textContent: "読み込み中… (その日の最初の1回は1分ほどかかります)"}));
+      try {
+        const j = await api(`/api/racers?q=${encodeURIComponent(q.value)}`);
+        if (!j.rows.length) { out.replaceChildren(h("p", {textContent: "見つかりません"})); return; }
+        out.replaceChildren(table([["登録番号", "登録番号"], ["名前", "名前", "l"], ["級", "級別"], ["支部", "支部"], ["年齢", "年齢"],
+          ["出走", "出走"], ["1着率", r => pct(r["1着率"])], ["2連率", r => pct(r["2連率"])], ["3連率", r => pct(r["3連率"])],
+          ["平均ST", r => r["平均ST"] == null ? "" : r["平均ST"].toFixed(2)], ["F", "フライング"],
+          ["単勝回収率", r => pct(r["単勝回収率"])], ["複勝回収率", r => pct(r["複勝回収率"])],
+          ...[1, 2, 3, 4, 5, 6].map(l => [`${l}号艇 1着率(出走)`, r => r[`${l}号艇 出走`] ? `${pct0(r[`${l}号艇 1着率`])} (${r[`${l}号艇 出走`]})` : ""])],
+          j.rows), h("p", {className: "note", textContent: "直近1年の成績。回収率は毎回100円買ったときの払戻 / 購入額。"}));
+      } catch (e) { out.replaceChildren(h("p", {className: "err", textContent: e.message})); }
+    };
+    q.onkeydown = e => e.key === "Enter" && go();
+    el.append(h("div", {className: "bar"}, q, h("button", {className: "btn", textContent: "探す", onclick: go})), out);
+    if (q.value) go();
+  }},
+
+  data: {title: "学習・データ", async render(el) {
+    let s = {};
+    try { s = await api("/api/status"); } catch {}
+    const row = (label, cmd, note) => h("div", {className: "card"},
+      h("div", {className: "bar"}, h("button", {className: "btn", textContent: label, dataset: {run: 1}, onclick: () => run(cmd, today())}),
+        h("span", {className: "note", textContent: note})));
+    el.append(
+      h("div", {className: "card"},
+        h("div", {}, `データ (DB): ${s.db ? (s.db_last || "?") + " の成績まで" : "まだありません"}`),
+        h("div", {}, `予想モデル: ${s.model ? (s.trained || "?") + " のデータまでで学習" : "まだありません"}` +
+          `${s.late_model ? " (直前情報のモデルあり)" : ""}`),
+        h("div", {}, `学習に使う装置: ${s.device === "gpu" ? "GPU" : "CPU"}`),
+        h("div", {className: "note", textContent: "GPU は LightGBM の OpenCL 版で使います (NVIDIA・AMD・Intel のグラフィックドライバーが入っていれば自動)。使えないときは CPU の全コアで学習します。"})),
+      row("データを取り込む", "update", "DB の最終日の翌日〜昨日の成績と番組表を公式サイトから取り込みます (数分)"),
+      row("学習し直す", "train", "直近2年のデータで予想モデルを作り直します (40分〜1時間半。GPU があれば短くなります)"),
+      row("毎朝の処理を今すぐ", "daily", "取り込み → 昨日の答え合わせ → (月曜は振り返り) → 7日ごとに学習し直し"),
+      s.db ? "" : row("DB をダウンロード", "setup", "GitHub の Release から過去の成績 (約1.1GB) を取得します"));
+  }},
+};
+
+const state = {};
+let current = "today";
+function show(name) {
+  current = name;
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.page === name));
+  const el = $("#main");
+  el.replaceChildren();
+  PAGES[name].render(el).then(() => pollJob());
+  try { localStorage.setItem("page", name); } catch {}
+}
+$("#tabs").append(...Object.entries(PAGES).map(([k, p]) =>
+  h("button", {textContent: p.title, dataset: {page: k}, onclick: () => show(k)})));
+let first = "today";
+try { first = localStorage.getItem("page") || "today"; } catch {}
+loadStatus();
+show(PAGES[first] ? first : "today");
+</script>
+</body>
+</html>

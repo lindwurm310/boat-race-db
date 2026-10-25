@@ -9,8 +9,9 @@
   const title = el("span", {textContent: "予想"});
   const reload = el("button", {textContent: "更新", title: "直前情報とオッズを取り直す"});
   const fold = el("button", {textContent: "－", title: "たたむ"});
+  const home = el("a", {textContent: "操作画面", href: "http://127.0.0.1:8765/", target: "_blank", title: "今日の予想・答え合わせ・振り返り・学習"});
   const body = el("div", {className: "byosou-body"});
-  head.append(title, reload, fold);
+  head.append(title, home, reload, fold);
   panel.append(head, body);
   document.body.append(panel);
 
@@ -36,7 +37,7 @@
       reload.disabled = false;
       if (!res || res.offline) {
         body.replaceChildren(el("div", {className: "byosou-msg",
-          textContent: "パソコンの予想サーバーに繋がりません。デスクトップの「ボートレース 拡張機能用サーバー」を起動してから「更新」を押してください。"}));
+          textContent: "パソコンの予想サーバーに繋がりません。デスクトップの「ボートレース予想サーバー」を起動してから「更新」を押してください。"}));
       } else if (!res.ok) {
         body.replaceChildren(el("div", {className: "byosou-msg", textContent: res.body.error || "エラー"}));
       } else {

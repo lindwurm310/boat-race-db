@@ -1,7 +1,7 @@
 ﻿# ボートレース予想ツール (yosou) のインストーラー
 #   install.bat から呼ばれる。管理者権限は不要 (ユーザーのフォルダに入れる)。
 #   1. Python が無ければ入れる  2. インストール先にファイルをコピー  3. ライブラリを入れる
-#   4. DB の取得・更新・モデルの学習  5. ショートカット・PATH・毎朝の自動実行の登録
+#   4. DB の取得・更新・モデルの学習  5. サーバー起動の bat・PATH・毎朝の自動実行・Chrome 拡張機能
 param([string]$Dest = "$env:LOCALAPPDATA\BoatRaceYosou", [switch]$Quiet)
 
 # Windows PowerShell 5.1 は、外部コマンド (py, pip など) が標準エラーに書いただけで止まってしまうので
@@ -110,34 +110,27 @@ Yosou update
 Step "5/6 予想モデルの学習"
 if (Test-Path (Join-Path $Dest "model\win.txt")) {
     Write-Host "モデルはもうあります (毎朝の自動実行で 7 日ごとに学習し直します)"
-} elseif (Ask "モデルを今から学習しますか? (40分〜1時間半ほど。あとで yosou train でも可)") {
+} elseif (Ask "モデルを今から学習しますか? (40分〜1時間半ほど。あとで Chrome の操作画面の「学習・データ」からでも可)") {
     Yosou train
 }
 
-# ---- 5. ショートカット・PATH・自動実行 ----
-Step "6/6 ショートカットと自動実行の登録"
-$sh = New-Object -ComObject WScript.Shell
+# ---- 5. サーバー起動の bat・PATH・自動実行 ----
+Step "6/6 デスクトップと自動実行の登録"
+# 予想・答え合わせ・振り返り・選手・学習は全部 Chrome の操作画面から。デスクトップにはサーバーを起動する bat だけを置く
+$server = @"
+@echo off
+title BoatRaceYosou server
+cd /d "%~dp0"
+call "%~dp0yosou.bat" serve %*
+pause
+"@
+Set-Content -Path (Join-Path $Dest "server.bat") -Value $server -Encoding ASCII -ErrorAction Stop
 $desk = [Environment]::GetFolderPath("Desktop")
-$links = @(
-    @("ボートレース 今日の予想", "/k `"`"$yosou`" predict`""),
-    @("ボートレース 1週間の予想", "/k `"`"$yosou`" week`""),
-    @("ボートレース 先週の振り返り", "/k `"`"$yosou`" review`""),
-    @("ボートレース 直前のおすすめ", "/k `"`"$yosou`" live`""),
-    @("ボートレース 答え合わせ (昨日)", "/k `"`"$yosou`" check --date yesterday`""),
-    @("ボートレース 拡張機能用サーバー", "/k `"`"$yosou`" serve`""),
-    @("ボートレース 選手の成績", "/k `"`"$yosou`" racer && start `"`" `"$Dest\predictions`"`"")
-)
-foreach ($l in $links) {
-    $lnk = $sh.CreateShortcut((Join-Path $desk "$($l[0]).lnk"))
-    $lnk.TargetPath = "$env:ComSpec"
-    $lnk.Arguments = $l[1]
-    $lnk.WorkingDirectory = $Dest
-    $lnk.Save()
-}
-$lnk = $sh.CreateShortcut((Join-Path $desk "ボートレース 予想フォルダ.lnk"))
-$lnk.TargetPath = Join-Path $Dest "predictions"
-$lnk.Save()
-Write-Host "デスクトップにショートカットを作りました"
+Get-ChildItem $desk -Filter "ボートレース *.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force  # 前のバージョンのショートカット
+$deskBat = Join-Path $desk "ボートレース予想サーバー.bat"
+# デスクトップの bat はインストール先の server.bat を呼ぶだけ。cmd が読めるように ANSI (日本語 Windows では Shift_JIS) で書く
+Set-Content -Path $deskBat -Value "@echo off`r`ncall `"$Dest\server.bat`"" -Encoding Default -ErrorAction Stop
+Write-Host "デスクトップに「ボートレース予想サーバー.bat」を置きました (ダブルクリックで Chrome に操作画面が開きます)"
 
 $parts = @(([string][Environment]::GetEnvironmentVariable("Path", "User")) -split ";" | Where-Object { $_ })
 if ($parts -notcontains $Dest) {
@@ -151,11 +144,13 @@ if (Ask "毎朝 7:00 に、成績の取り込み・答え合わせ・今日の�
 }
 
 # ---- Chrome 拡張機能 ----
+$sh = New-Object -ComObject WScript.Shell
 $startup = [Environment]::GetFolderPath("Startup")
-if (Ask "パソコンを起動したとき、Chrome 拡張機能用のサーバーを自動で起動しますか? (画面は最小化されます)") {
-    $lnk = $sh.CreateShortcut((Join-Path $startup "ボートレース 拡張機能用サーバー.lnk"))
-    $lnk.TargetPath = "$env:ComSpec"
-    $lnk.Arguments = "/k `"`"$yosou`" serve`""
+Get-ChildItem $startup -Filter "ボートレース *.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force
+if (Ask "パソコンを起動したとき、サーバーを自動で起動しますか? (画面は最小化されます。ブラウザは開きません)") {
+    $lnk = $sh.CreateShortcut((Join-Path $startup "ボートレース 予想サーバー.lnk"))
+    $lnk.TargetPath = Join-Path $Dest "server.bat"
+    $lnk.Arguments = "--no-open"
     $lnk.WorkingDirectory = $Dest
     $lnk.WindowStyle = 7
     $lnk.Save()
@@ -168,7 +163,7 @@ Write-Host "  1. Chrome のアドレス欄に chrome://extensions と入れて�
 Write-Host "  2. 右上の「デベロッパー モード」をオンにする"
 Write-Host "  3. 「パッケージ化されていない拡張機能を読み込む」を押して、次のフォルダを選ぶ"
 Write-Host "       $ext"
-Write-Host "  4. デスクトップの「ボートレース 拡張機能用サーバー」を起動したまま、"
+Write-Host "  4. ツールバーの拡張機能のボタン (パズルのマークからピン留め) で操作画面が開きます。"
 Write-Host "     boatrace.jp のレースのページ (出走表・直前情報・オッズ) を開くと右下におすすめが出ます"
 if (Ask "拡張機能のフォルダを開きますか? (手順3で選ぶフォルダ)") {
     Start-Process explorer.exe $ext
@@ -177,8 +172,6 @@ if (Ask "拡張機能のフォルダを開きますか? (手順3で選ぶフォ�
 
 Write-Host ""
 Write-Host "インストールが終わりました。" -ForegroundColor Green
-Write-Host "  朝: デスクトップの「ボートレース 今日の予想」(まとめて見るなら「1週間の予想」)"
-Write-Host "  週に1回: 「ボートレース 先週の振り返り」(毎朝の自動実行を登録していれば月曜に自動で出ます)"
-Write-Host "  レース前: 「ボートレース 直前のおすすめ」(締切30分以内のレース)"
-Write-Host "  Chrome で見るなら: 「ボートレース 拡張機能用サーバー」を起動して boatrace.jp を開く"
+Write-Host "  デスクトップの「ボートレース予想サーバー.bat」をダブルクリックすると、Chrome に操作画面が開きます。"
+Write-Host "  今日の予想・1週間の予想・答え合わせ・先週の振り返り・選手の成績・学習は全部そこから操作できます。"
 Write-Host "  使い方: $Dest\analysis\README.md"

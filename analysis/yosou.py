@@ -10,7 +10,7 @@
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
-  python analysis/yosou.py serve                 Chrome 拡張機能用のサーバー (boatrace.jp のページにおすすめを表示)
+  python analysis/yosou.py serve                 Chrome の操作画面 (http://127.0.0.1:8765/) と拡張機能用のサーバー。全部の機能を Chrome から使える
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
   予想は predictions/YYYYMMDD.csv、答え合わせは predictions/YYYYMMDD_check.csv と predictions/log.csv に出る。
@@ -488,94 +488,11 @@ def append_log(logs):
     return path
 
 
-# ---------------- serve: Chrome 拡張機能から呼ばれるサーバー ----------------
+# ---------------- serve: Chrome から全部の機能を使うためのサーバー ----------------
 def cmd_serve(a):
-    """http://127.0.0.1:PORT/recommend?hd=20261026&jcd=1&rno=12 に直前情報とオッズを取って予想を返す。
-    拡張機能 (chrome-extension フォルダ) が boatrace.jp のレースのページにこの結果を表示する。"""
-    import copy
-    import threading
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from urllib.parse import parse_qs, urlparse
-    import live
-    models = load_models(a.model)
-    con = sqlite3.connect(a.db)
-    venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
-    con.close()
-    days, lock = {}, threading.Lock()
-
-    def day(date):
-        """その日の特徴量と選手成績 (無ければ predict を実行して作る)。"""
-        if date not in days:
-            b = copy.copy(a)
-            b.date = date
-            if not os.path.exists(day_path(date, "_feat.pkl")):
-                print(f"{date} の予想がまだ無いので predict を実行します")
-                try:
-                    cmd_predict(b)
-                except SystemExit as e:  # 番組表がまだ無いなど
-                    raise RuntimeError(str(e))
-            days[date] = (pd.read_pickle(day_path(date, "_feat.pkl")), racer_stats(b))
-        return days[date]
-
-    def answer(q):
-        hd, jcd, rno = q["hd"][0].replace("-", ""), int(q["jcd"][0]), int(q["rno"][0])
-        date = f"{hd[:4]}-{hd[4:6]}-{hd[6:]}"
-        with lock:  # 予想と公式サイトへのアクセスは1つずつ
-            df, stats = day(date)
-            rid = f"{hd}-{jcd:02d}-{rno:02d}"
-            d = df[df.race_id == rid]
-            if len(d) != 6:
-                return 404, {"error": f"{venue.get(jcd, jcd)} {rno}R は予想にありません (6艇そろっていない・番組表に無い)"}
-            lv = live.race_live(jcd, rno, date)
-            use_late, rows, logs, top5 = recommend(d, lv, models, stats)
-            append_log(logs)
-        buys = [x["艇"] for x in rows if x["買い"]]
-        print(f"{dt.datetime.now():%H:%M:%S} {venue.get(jcd, jcd)} {rno}R  おすすめ: "
-              + (f"単勝 {' '.join(map(str, buys))}" if buys else "見送り"))
-        return 200, {"venue": venue.get(jcd, str(jcd)), "rno": rno, "date": date, "late": use_late,
-                     "wind_speed": lv["wind_speed"], "wave_cm": lv["wave_cm"], "rows": rows, "buys": buys,
-                     "top5": top5, "ev_min": EV_MIN}
-
-    def plain(o):
-        """JSON にできる形へ (numpy の数値と NaN を直す)"""
-        if isinstance(o, dict):
-            return {str(k): plain(v) for k, v in o.items()}
-        if isinstance(o, (list, tuple)):
-            return [plain(v) for v in o]
-        if hasattr(o, "item"):
-            o = o.item()
-        if isinstance(o, float) and np.isnan(o):
-            return None
-        return o
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            u = urlparse(self.path)
-            try:
-                if u.path == "/health":
-                    code, body = 200, {"ok": True}
-                elif u.path == "/recommend":
-                    code, body = answer(parse_qs(u.query))
-                else:
-                    code, body = 404, {"error": "not found"}
-            except Exception as e:  # 通信エラーなどはそのまま拡張機能に表示する
-                code, body = 500, {"error": f"{type(e).__name__}: {e}"}
-            data = json.dumps(plain(body), ensure_ascii=False)
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(data.encode("utf-8"))
-
-        def log_message(self, *args):
-            pass
-
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    print(f"拡張機能用のサーバーを起動しました: http://127.0.0.1:{a.port}  (この画面を閉じると止まります)")
-    print("boatrace.jp のレースのページ (出走表・直前情報・オッズ) を開くと、おすすめが表示されます")
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    """http://127.0.0.1:PORT/ の操作画面と、拡張機能が boatrace.jp のページに出す予想 (analysis/server.py)。"""
+    import server
+    server.run(a, sys.modules[__name__])
 
 
 def fmt_pct(x):
@@ -822,6 +739,7 @@ def main():
     ap.add_argument("--no", type=int, help="racer: 登録番号")
     ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
+    ap.add_argument("--no-open", action="store_true", help="serve: 起動したときにブラウザを開かない")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
     a = ap.parse_args()
     if a.date in ("today", "yesterday", "tomorrow"):

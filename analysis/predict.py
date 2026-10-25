@@ -251,6 +251,40 @@ MODELS = {"v1前日": (V1_FEATS, "binary"), "v1直前": (V1_FEATS + LATE[:-1], "
           "v3前日": (BASE_FEATS, "v3"), "v3直前": (LATE_FEATS, "v3")}
 
 
+_DEVICE = []
+
+
+def device():
+    """学習に使う装置。GPU (OpenCL。NVIDIA・AMD・Intel) が使えれば "gpu"、無ければ "cpu"。
+    環境変数 YOSOU_DEVICE=cpu / gpu で固定できる。"""
+    if not _DEVICE:
+        want = os.environ.get("YOSOU_DEVICE", "auto").lower()
+        dev = "cpu"
+        if want != "cpu":
+            try:  # 小さなデータで1回試す (pip の LightGBM は Windows・Linux なら GPU 対応で入る)
+                x = np.random.rand(500, 4)
+                lgb.train(dict(objective="binary", device_type="gpu", verbose=-1),
+                          lgb.Dataset(x, (x[:, 0] > .5).astype(int)), 2)
+                dev = "gpu"
+            except Exception as e:
+                if want == "gpu":
+                    print(f"GPU が使えません ({e})。CPU で学習します")
+        _DEVICE.append(dev)
+        print(f"学習に使う装置: {'GPU' if dev == 'gpu' else 'CPU'}")
+    return _DEVICE[0]
+
+
+def train_lgb(params, *args, **kw):
+    """lgb.train を GPU で (使えれば)。GPU で失敗したら CPU でやり直す。"""
+    if device() == "gpu":
+        try:
+            return lgb.train(dict(params, device_type="gpu"), *args, **kw)
+        except Exception as e:
+            print(f"GPU での学習に失敗したので CPU に切り替えます ({e})")
+            _DEVICE[0] = "cpu"
+    return lgb.train(params, *args, **kw)
+
+
 def fit(train, val, feats, objective="pl", stages=1):
     """objective="binary": 艇ごとに1着かどうか (v1/v2)。
     objective="pl": レース内の順位を Plackett-Luce で学習。stages=1 ならレース内 softmax で1着だけ、
@@ -261,7 +295,7 @@ def fit(train, val, feats, objective="pl", stages=1):
         params["objective"] = "binary"
         dt = lgb.Dataset(train[feats], train["win"], categorical_feature=cats(feats))
         dv = lgb.Dataset(val[feats], val["win"], categorical_feature=cats(feats), reference=dt)
-        m = lgb.train(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
+        m = train_lgb(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
         m.softmax = False
         return m
     train, val = race_sorted(train), race_sorted(val)
@@ -270,7 +304,7 @@ def fit(train, val, feats, objective="pl", stages=1):
     dt = lgb.Dataset(train[feats], train["win"], categorical_feature=cats(feats), free_raw_data=False)
     dv = lgb.Dataset(val[feats], val["win"], categorical_feature=cats(feats), reference=dt)
     feval = lambda preds, ds: ("win_logloss", win_logloss(preds, fv), False)
-    m = lgb.train(params, dt, 3000, valid_sets=[dv], feval=feval,
+    m = train_lgb(params, dt, 3000, valid_sets=[dv], feval=feval,
                   callbacks=[lgb.early_stopping(100, verbose=False)])
     m.softmax = True
     return m
@@ -392,7 +426,7 @@ def fit_odds(tr, va, feats):
     tr, va = tr[tr.payout.notna()], va[va.payout.notna()]
     dt = lgb.Dataset(tr[feats], np.log(tr.payout / 100), categorical_feature=cats(feats))
     dv = lgb.Dataset(va[feats], np.log(va.payout / 100), categorical_feature=cats(feats), reference=dt)
-    return lgb.train(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
+    return train_lgb(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
 
 
 def expected_value(df, P, odds_model, feats):
