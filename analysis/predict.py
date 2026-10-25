@@ -373,6 +373,35 @@ class Predictor:
         return p
 
 
+# ---------------- 単勝の期待値 (予想勝率 × 予想オッズ) ----------------
+# 公式データには買う時点のオッズが無いので、「1着になった艇の単勝払戻 = その艇の最終オッズ」を使って
+# 番組表の情報からオッズ (=買う人の評価) を予想するモデルを作る。予想勝率 × 予想オッズ が 1 を超える艇は
+# 買う人に過小評価されている可能性が高い。
+def win_payouts(pay):
+    w = pay[(pay.bet_type == "単勝") & (pay.combination != "特払い")].copy()
+    w["lane"] = w["combination"].astype(int)
+    return w.drop_duplicates(["race_id", "lane"])[["race_id", "lane", "payout"]]
+
+
+def fit_odds(tr, va, feats):
+    """tr, va: features() の行に単勝払戻 payout (1着の艇だけ値がある) を付けたもの。"""
+    params = dict(objective="regression", learning_rate=0.05, num_leaves=63, min_data_in_leaf=100,
+                  feature_fraction=0.8, bagging_fraction=0.8, bagging_freq=1, verbose=-1)
+    tr, va = tr[tr.payout.notna()], va[va.payout.notna()]
+    dt = lgb.Dataset(tr[feats], np.log(tr.payout / 100), categorical_feature=cats(feats))
+    dv = lgb.Dataset(va[feats], np.log(va.payout / 100), categorical_feature=cats(feats), reference=dt)
+    return lgb.train(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
+
+
+def expected_value(df, P, odds_model, feats):
+    """各艇の (予想勝率, 予想オッズ, 期待値)。行は race_id, 列は 1〜6 号艇。"""
+    df = race_sorted(df)
+    o = pd.Series(np.exp(odds_model.predict(df[feats], num_iteration=odds_model.best_iteration or None)),
+                  index=df.index)
+    odds = df.assign(o=o).pivot(index="race_id", columns="lane", values="o")[[1, 2, 3, 4, 5, 6]].loc[P.index]
+    return odds, P * odds
+
+
 def finish_order(df, index):
     """各レースの 1〜3 着の艇番 (行 = race_id, 列 = 1,2,3)。"""
     return df[df.finish.between(1, 3)].pivot_table(index="race_id", columns="finish", values="lane",

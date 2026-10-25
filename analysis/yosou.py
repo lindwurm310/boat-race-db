@@ -30,7 +30,11 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 import build_db  # noqa: E402
 import fetch  # noqa: E402
-from predict import V4_FEATS, PERMS2, PERMS3, Predictor, features, load  # noqa: E402
+from predict import (V4_FEATS, PERMS2, PERMS3, Predictor, expected_value, features, fit_odds, load,  # noqa: E402
+                     win_payouts)
+import lightgbm as lgb  # noqa: E402
+
+EV_MIN = 1.0  # 単勝を買う期待値の下限 (2025〜2026年の検証で回収率 約103%。analysis/README.md)
 
 REPO = "lindwurm310/boat-race-db"
 OUT = os.path.join(ROOT, "predictions")
@@ -98,8 +102,8 @@ def cmd_train(a):
     warm = (dt.date.fromisoformat(end) - dt.timedelta(days=a.days)).isoformat()
     start = (dt.date.fromisoformat(warm) - dt.timedelta(days=HISTORY_DAYS)).isoformat()  # 過去成績の蓄積用
     val = (dt.date.fromisoformat(end) - dt.timedelta(days=30)).isoformat()
-    raw, _ = load(a.db, start, end)
-    df = features(raw)
+    raw, pay = load(a.db, start, end)
+    df = features(raw).merge(win_payouts(pay), on=["race_id", "lane"], how="left")
     tr, va = df[(df.race_date >= warm) & (df.race_date < val)], df[df.race_date >= val]
     print(f"学習 {warm}〜{val} {tr.race_id.nunique()}レース / 検証 {val}〜{end} {va.race_id.nunique()}レース")
     pr = Predictor(V4_FEATS, "v3").fit(tr, va)
@@ -107,6 +111,8 @@ def cmd_train(a):
     win = va.pivot(index="race_id", columns="lane", values="win").loc[P.index].values
     print(f"検証期間の本命1着率 {(win[np.arange(len(P)), P.values.argmax(1)] == 1).mean():.1%}")
     pr.save(a.model)
+    om = fit_odds(tr, va, V4_FEATS)
+    om.save_model(os.path.join(a.model, "odds.txt"), num_iteration=om.best_iteration)
     with open(os.path.join(a.model, "trained.json"), "w", encoding="utf-8") as f:
         json.dump(dict(data_end=end, train=[warm, val], val=[val, end]), f, ensure_ascii=False)
     print("保存しました:", a.model)
@@ -157,6 +163,13 @@ def advice(p_top):
     return "やや混戦"
 
 
+def ev_columns(ev, odds):
+    buy = [l for l in range(1, 7) if ev[l - 1] >= EV_MIN]
+    return {"単勝買い目": " ".join(map(str, buy)),
+            "買い目の期待値": " ".join(f"{ev[l - 1]:.2f}" for l in buy),
+            **{f"{l}号艇の予想オッズ": round(float(odds[l - 1]), 1) for l in range(1, 7)}}
+
+
 def cmd_predict(a):
     pr = Predictor.load(a.model)
     prog = program(a.date, a.raw)
@@ -174,6 +187,12 @@ def cmd_predict(a):
     venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
     con.close()
     info = prog.drop_duplicates("race_id").set_index("race_id")
+    odds_path = os.path.join(a.model, "odds.txt")
+    EV = None
+    if os.path.exists(odds_path):
+        om = lgb.Booster(model_file=odds_path)
+        om.best_iteration = 0
+        odds, EV = expected_value(df, P, om, V4_FEATS)
     rows = []
     for n, rid in enumerate(P.index):
         p = P.values[n]
@@ -189,14 +208,19 @@ def cmd_predict(a):
                      "3連単上位5点の的中確率": round(float(tri[n][order[:5]].sum()), 3),
                      "2連単上位3点": " ".join(f"{i+1}-{j+1}" for i, j in ex_top),
                      **{f"{l}号艇": round(float(p[l - 1]), 3) for l in range(1, 7)},
-                     "判断": advice(float(p.max()))})
+                     "判断": advice(float(p.max())),
+                     **(ev_columns(EV.values[n], odds.values[n]) if EV is not None else {})})
     out = pd.DataFrame(rows).sort_values(["締切", "場"])
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, a.date.replace("-", "") + ".csv")
     out.to_csv(path, index=False, encoding="utf-8-sig")  # Excel で文字化けしないように BOM 付き
     pd.set_option("display.width", 200, "display.max_rows", 300, "display.unicode.east_asian_width", True)
-    print(out[["場", "R", "締切", "本命", "本命選手", "本命1着確率", "予想着順", "3連単上位5点", "判断"]]
-          .to_string(index=False))
+    cols = ["場", "R", "締切", "本命", "本命選手", "本命1着確率", "予想着順", "3連単上位5点", "判断"]
+    if "単勝買い目" in out:
+        cols += ["単勝買い目", "買い目の期待値"]
+        n = out["単勝買い目"].str.split().str.len().sum()
+        print(f"単勝の買い目 (期待値 {EV_MIN} 以上): {n} 点")
+    print(out[cols].to_string(index=False))
     print("\n保存しました:", path)
 
 
@@ -217,11 +241,20 @@ def results_of(date, raw):
         pays, columns=["race_id", "bet_type", "combination", "payout", "popularity"]))
 
 
+def ev_check(r, rid, tan):
+    """予想の単勝買い目 (期待値 1 以上) の点数・的中・払戻。"""
+    if "単勝買い目" not in r or not isinstance(r["単勝買い目"], str) or not r["単勝買い目"].strip():
+        return {"単勝点数": 0, "単勝的中": 0, "単勝払戻": 0} if "単勝買い目" in r else {}
+    lanes = [int(x) for x in r["単勝買い目"].split()]
+    got = sum(tan.get((rid, l), 0) for l in lanes)
+    return {"単勝点数": len(lanes), "単勝的中": int(got > 0), "単勝払戻": got}
+
+
 def cmd_check(a):
     path = os.path.join(OUT, a.date.replace("-", "") + ".csv")
     if not os.path.exists(path):
         sys.exit(f"予想ファイルがありません: {path} (先に predict を実行)")
-    pred = pd.read_csv(path, encoding="utf-8-sig").set_index("race_id")
+    pred = pd.read_csv(path, encoding="utf-8-sig", dtype={"単勝買い目": str}).set_index("race_id")
     races, rp = results_of(a.date, a.raw)
     if races is None:
         sys.exit(f"{a.date} の成績がまだ公開されていません (公式サイトでは翌日以降)")
@@ -231,6 +264,10 @@ def cmd_check(a):
                                                 else pd.to_numeric(s, errors="coerce")))
     st = st.pivot(index="race_id", columns="lane", values="st")
     pay3 = pay[pay.bet_type == "３連単"].set_index("race_id")["payout"]
+    tan = win_payouts(pay).set_index(["race_id", "lane"])["payout"]
+    # 欠場・フライング・出遅れの艇の単勝は返還 (100 円)
+    for rid_, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
+        tan[(rid_, int(lane))] = 100
     rows = []
     for rid, r in pred.iterrows():
         if rid not in fin.index:
@@ -247,17 +284,25 @@ def cmd_check(a):
                          風速=races.at[rid, "wind_speed"], 波=races.at[rid, "wave_cm"],
                          本命1着=order[0] == fav, 本命3着以内=f.get(fav) in (1, 2, 3),
                          予想着順的中=r["予想着順"] == actual, 上位5点的中=actual in tickets,
-                         三連単配当=pay3.get(rid)))
+                         三連単配当=pay3.get(rid),
+                         **ev_check(r, rid, tan)))
     c = pd.DataFrame(rows)
     out = os.path.join(OUT, a.date.replace("-", "") + "_check.csv")
     c.to_csv(out, index=False, encoding="utf-8-sig")
     n = len(c)
+    if "単勝点数" in c:
+        k = c["単勝点数"].sum()
+        summary_ev = dict(単勝期待値買い_点数=int(k), 単勝期待値買い_的中=int(c["単勝的中"].sum()),
+                          単勝期待値買い_回収率=c["単勝払戻"].sum() / (100 * k) if k else 0)
+    else:
+        summary_ev = {}
     summary = dict(date=a.date, races=n, 本命1着率=c["本命1着"].mean(), 本命3着以内率=c["本命3着以内"].mean(),
                    予想着順的中率=c["予想着順的中"].mean(), 三連単上位5点的中率=c["上位5点的中"].mean(),
-                   三連単上位5点回収率=c.loc[c["上位5点的中"], "三連単配当"].sum() / (500 * n) if n else 0)
+                   三連単上位5点回収率=c.loc[c["上位5点的中"], "三連単配当"].sum() / (500 * n) if n else 0,
+                   **summary_ev)
     print(f"{a.date}  {n}レース")
     for k, v in list(summary.items())[2:]:
-        print(f"  {k}: {v:.1%}")
+        print(f"  {k}: {v:.1%}" if isinstance(v, float) else f"  {k}: {v}")
     miss = c[~c["本命1着"]]
     if len(miss):
         print("\n本命が1着を逃したレースの内訳 (原因の手がかり)")
