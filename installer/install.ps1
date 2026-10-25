@@ -120,6 +120,8 @@ $sh = New-Object -ComObject WScript.Shell
 $desk = [Environment]::GetFolderPath("Desktop")
 $links = @(
     @("ボートレース 今日の予想", "/k `"`"$yosou`" predict`""),
+    @("ボートレース 1週間の予想", "/k `"`"$yosou`" week`""),
+    @("ボートレース 先週の振り返り", "/k `"`"$yosou`" review`""),
     @("ボートレース 直前のおすすめ", "/k `"`"$yosou`" live`""),
     @("ボートレース 答え合わせ (昨日)", "/k `"`"$yosou`" check --date yesterday`""),
     @("ボートレース 拡張機能用サーバー", "/k `"`"$yosou`" serve`""),
@@ -143,7 +145,7 @@ if ($parts -notcontains $Dest) {
     Write-Host "コマンドプロンプトで yosou と打てば使えるようにしました (新しく開いた画面から)"
 }
 
-if (Ask "毎朝 7:00 に、成績の取り込み・答え合わせ・今日の予想を自動で実行しますか?") {
+if (Ask "毎朝 7:00 に、成績の取り込み・答え合わせ・今日の予想 (月曜は先週の振り返りも) を自動で実行しますか?") {
     schtasks /Create /F /SC DAILY /ST 07:00 /TN "BoatRaceYosou\daily" /TR "`"$Dest\daily.bat`"" | Out-Null
     Write-Host "タスクスケジューラに登録しました (BoatRaceYosou\daily、結果は $Dest\daily.log)"
 }
@@ -175,7 +177,8 @@ if (Ask "拡張機能のフォルダを開きますか? (手順3で選ぶフォ�
 
 Write-Host ""
 Write-Host "インストールが終わりました。" -ForegroundColor Green
-Write-Host "  朝: デスクトップの「ボートレース 今日の予想」"
+Write-Host "  朝: デスクトップの「ボートレース 今日の予想」(まとめて見るなら「1週間の予想」)"
+Write-Host "  週に1回: 「ボートレース 先週の振り返り」(毎朝の自動実行を登録していれば月曜に自動で出ます)"
 Write-Host "  レース前: 「ボートレース 直前のおすすめ」(締切30分以内のレース)"
 Write-Host "  Chrome で見るなら: 「ボートレース 拡張機能用サーバー」を起動して boatrace.jp を開く"
 Write-Host "  使い方: $Dest\analysis\README.md"

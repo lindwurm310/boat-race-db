@@ -8,13 +8,17 @@
   python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因を集計
   python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 7日ごとに学習し直す
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
+  python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
+  python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
   python analysis/yosou.py serve                 Chrome 拡張機能用のサーバー (boatrace.jp のページにおすすめを表示)
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
   予想は predictions/YYYYMMDD.csv、答え合わせは predictions/YYYYMMDD_check.csv と predictions/log.csv に出る。
 """
 import argparse
+import contextlib
 import datetime as dt
+import io
 import gzip
 import json
 import os
@@ -592,6 +596,175 @@ def racer_stats(a):
     return t.to_dict("index")
 
 
+# ---------------- week: 1週間分をまとめて予想 / review: 先週の振り返り ----------------
+def quietly(f, *args):
+    """f(*args) を画面に出さずに実行する。(成功したか, sys.exit のメッセージ) を返す。"""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            f(*args)
+        return True, ""
+    except SystemExit as e:
+        return False, str(e)
+    except Exception as e:  # 通信エラーなど
+        return False, f"{type(e).__name__}: {e}"
+
+
+def with_date(a, date):
+    return argparse.Namespace(**{**vars(a), "date": date})
+
+
+def cmd_week(a):
+    """今日から7日分、番組表が公開されている日をまとめて予想する。
+    番組表 (出走表) は公式サイトで前日〜当日朝に公開されるので、ふつう予想できるのは今日と明日まで。
+    毎朝の自動実行 (daily) で、残りの日も公開され次第その日の朝に予想される。"""
+    start = dt.date.fromisoformat(a.date)
+    done, frames = [], []
+    for i in range(7):
+        d = (start + dt.timedelta(days=i)).isoformat()
+        ok, msg = quietly(cmd_predict, with_date(a, d))
+        if ok:
+            t = pd.read_csv(day_path(d, ".csv"), encoding="utf-8-sig", dtype={"単勝買い目": str})
+            frames.append(t.assign(日付=d))
+            done.append(d)
+            print(f"{d}: {len(t)}レースを予想")
+        else:
+            print(f"{d}: {msg if 'Error' in msg else '番組表がまだ公開されていません'}")
+    if not frames:
+        sys.exit("予想できる日がありません")
+    week = pd.concat(frames)
+    week = week[["日付"] + [c for c in week.columns if c != "日付"]]
+    path = os.path.join(OUT, f"week_{start:%Y%m%d}.csv")
+    week.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"\n{len(done)}日分 {len(week)}レース → {path}")
+    if "単勝買い目" in week:
+        buy = week[week["単勝買い目"].fillna("").str.strip() != ""]
+        print(f"単勝の買い目 (期待値 {EV_MIN} 以上) があるレース: {len(buy)}")
+        cols = ["日付", "場", "R", "締切", "本命", "本命選手", "本命1着確率", "単勝買い目", "買い目の期待値"]
+        print(buy[[c for c in cols if c in buy]].to_string(index=False))
+    if len(done) < 7:
+        print("\n残りの日は番組表が公開されたら予想できます (毎朝の自動実行で、その日の朝に予想されます)")
+
+
+def trained_end(a):
+    info = os.path.join(a.model, "trained.json")
+    if not os.path.exists(info):
+        return None
+    with open(info, encoding="utf-8") as f:
+        return json.load(f)["data_end"]
+
+
+def cmd_review(a):
+    """先週 (--date の前日までの7日間) の予想と結果を比べて、的中率・回収率・外れの原因をまとめる。
+    予想していなかった日は、その日より前のデータだけで学習したモデルがあれば後から予想して比べる。
+    最後にモデルを学習し直して、先週の結果を次の予想に反映する (--no-train で省略)。"""
+    end = dt.date.fromisoformat(a.date) - dt.timedelta(days=1)
+    days = [(end - dt.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
+    print(f"先週の振り返り: {days[0]}〜{days[-1]}")
+    quietly(cmd_update, a)  # 成績を DB に取り込む
+    t_end = trained_end(a)
+    checks, notes = [], []
+    for d in days:
+        if not os.path.exists(day_path(d, ".csv")):
+            if t_end and t_end < d:  # 学習に使っていない日なら後から予想しても公平
+                ok, msg = quietly(cmd_predict, with_date(a, d))
+                notes.append(f"{d}: 予想が無かったので後から予想 ({'OK' if ok else msg})")
+            else:
+                notes.append(f"{d}: 予想が無く、モデルがこの日の結果を学習済みなので比べられません")
+                continue
+        ok, msg = quietly(cmd_check, with_date(a, d))
+        if not ok:
+            notes.append(f"{d}: 答え合わせできません ({msg})")
+            continue
+        checks.append(pd.read_csv(day_path(d, "_check.csv"), encoding="utf-8-sig").assign(日付=d))
+    for n in notes:
+        print("  " + n)
+    if not checks:
+        sys.exit("答え合わせできる日がありません")
+    c = pd.concat(checks)
+    lines = report(c, days, a)
+    path = os.path.join(OUT, f"review_{dt.date.fromisoformat(days[-1]):%Y%m%d}.txt")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write("\n".join([f"先週の振り返り {days[0]}〜{days[-1]}"] + notes + [""] + lines) + "\n")
+    print("\n".join(lines))
+    print("\n保存しました:", path)
+    if not a.no_train:
+        print("\n先週の結果も含めてモデルを学習し直します (40分〜1時間半)")
+        cmd_train(a)
+
+
+def report(c, days, a):
+    """週の答え合わせ (_check.csv をまとめたもの) から振り返りの文章を作る。"""
+    L = []
+    n = len(c)
+    L.append(f"■ {c['日付'].nunique()}日 {n}レース")
+    L.append(f"  本命の1着率 {c['本命1着'].mean():.1%} / 3着以内 {c['本命3着以内'].mean():.1%}")
+    L.append(f"  予想着順 (3連単1点) の的中率 {c['予想着順的中'].mean():.1%}")
+    hit5 = c["上位5点的中"]
+    L.append(f"  3連単上位5点: 的中率 {hit5.mean():.1%}  回収率 {c.loc[hit5, '三連単配当'].sum() / (500 * n):.1%}")
+    if "単勝点数" in c and c["単勝点数"].sum():
+        k = c["単勝点数"].sum()
+        L.append(f"  単勝の買い目 (予想オッズの期待値1以上): {int(k)}点  的中 {int(c['単勝的中'].sum())}  "
+                 f"回収率 {c['単勝払戻'].sum() / (100 * k):.1%}")
+    lv = live_summary(days)
+    if lv:
+        L.append(lv)
+    # 前の週と比べる
+    log = os.path.join(OUT, "log.csv")
+    if os.path.exists(log):
+        lg = pd.read_csv(log, encoding="utf-8-sig")
+        prev = lg[(lg["date"] < days[0]) & (lg["date"] >= (dt.date.fromisoformat(days[0]) - dt.timedelta(days=7)).isoformat())]
+        if len(prev):
+            w = prev["races"]
+            L.append(f"  (その前の週: 本命の1着率 {(prev['本命1着率'] * w).sum() / w.sum():.1%}、"
+                     f"予想着順の的中率 {(prev['予想着順的中率'] * w).sum() / w.sum():.1%})")
+    # 自信の度合いごとの当たり方 (予想した確率と実際の1着率がずれていないか)
+    L.append("\n■ 本命の1着確率ごとの実際の1着率 (ずれが大きければ自信の付け方が合っていない)")
+    bands = pd.cut(c["本命1着確率"], [0, .4, .5, .6, .7, .8, 1.0])
+    for b, g in c.groupby(bands, observed=True):
+        L.append(f"  予想 {b.left:.0%}〜{b.right:.0%}: {len(g):4d}レース  予想の平均 {g['本命1着確率'].mean():.0%}"
+                 f" → 実際 {g['本命1着'].mean():.0%}")
+    # 場ごと
+    L.append("\n■ 場ごとの本命の1着率 (レース数の多い順)")
+    v = c.groupby("場").agg(レース=("本命1着", "size"), 本命1着率=("本命1着", "mean"), 予想=("本命1着確率", "mean"))
+    for name, r in v.sort_values("レース", ascending=False).iterrows():
+        L.append(f"  {name}: {int(r['レース'])}レース  {r['本命1着率']:.0%} (予想 {r['予想']:.0%})")
+    # 外れの原因
+    miss = c[~c["本命1着"]]
+    L.append(f"\n■ 本命が1着を逃した {len(miss)}レースの原因")
+    if len(miss):
+        tech = miss["決まり手"].value_counts()
+        L.append("  決まり手: " + "、".join(f"{k} {v}" for k, v in tech.items()))
+        slow = (miss["本命のST順位"] >= 3).mean()
+        L.append(f"  本命のスタートが3番手以下だった: {slow:.0%} (本命が勝ったレースでは "
+                 f"{(c.loc[c['本命1着'], '本命のST順位'] >= 3).mean():.0%})")
+        L.append("  1着になった艇: " + "、".join(f"{k}号艇 {v}" for k, v in miss["結果"].str[0].value_counts().sort_index().items()))
+        windy = c["風速"] >= 5
+        if windy.any():
+            L.append(f"  風5m以上のレース: 本命の1着率 {c.loc[windy, '本命1着'].mean():.0%} ({windy.sum()}レース)、"
+                     f"それ以外 {c.loc[~windy, '本命1着'].mean():.0%}")
+        strong = miss[miss["本命1着確率"] >= 0.7]
+        L.append(f"  堅いと見た (70%以上) のに負けた: {len(strong)}レース")
+        for _, r in strong.sort_values("本命1着確率", ascending=False).head(10).iterrows():
+            L.append(f"    {r['日付']} {r['場']} {r['R']}R 本命{r['本命']} ({r['本命1着確率']:.0%}) → {r['結果']} "
+                     f"{r['決まり手']} ST{r['本命のST順位']:.0f}番手 風{r['風速']}m")
+    L.append("\n■ フィードバック")
+    L.append("  先週の結果を DB に取り込み済み。学習し直すと、モーターの入れ替え・選手の調子・場の傾向が次の予想に入る。")
+    return L
+
+
+def live_summary(days):
+    path = os.path.join(OUT, "log.csv")
+    if not os.path.exists(path):
+        return None
+    lg = pd.read_csv(path, encoding="utf-8-sig")
+    lg = lg[lg["date"].isin(days)]
+    if "live買い_点数" not in lg or not lg["live買い_点数"].fillna(0).sum():
+        return None
+    k = lg["live買い_点数"].fillna(0).sum()
+    return f"  live・拡張機能の買い目 (実オッズ): {int(k)}点  回収率 {lg['live買い_払戻'].fillna(0).sum() / (100 * k):.1%}"
+
+
 # ---------------- daily: 結果の取り込み → 答え合わせ → 再学習 ----------------
 def cmd_daily(a):
     """毎日1回。昨日までの成績を DB に取り込み、昨日の予想を答え合わせし、7日ごとにモデルを学習し直す。"""
@@ -601,6 +774,12 @@ def cmd_daily(a):
         try:
             cmd_check(argparse.Namespace(**{**vars(a), "date": yday}))
         except SystemExit as e:  # 成績がまだ公開されていないなど
+            print(e)
+    if dt.date.today().weekday() == 0:  # 月曜は先週の振り返り (学習し直しは下でまとめてする)
+        print("\n===== 先週の振り返り")
+        try:
+            cmd_review(argparse.Namespace(**{**vars(a), "date": dt.date.today().isoformat(), "no_train": True}))
+        except SystemExit as e:
             print(e)
     info = os.path.join(a.model, "trained.json")
     age = None
@@ -629,7 +808,7 @@ def cmd_racer(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve"])
+    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review"])
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
@@ -641,13 +820,14 @@ def main():
     ap.add_argument("--race", help="live: 1レースだけ。場コード-レース番号 (例: 01-12)")
     ap.add_argument("--retrain-days", type=int, default=7, help="daily: 何日ごとに学習し直すか")
     ap.add_argument("--no", type=int, help="racer: 登録番号")
+    ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
     a = ap.parse_args()
     if a.date in ("today", "yesterday", "tomorrow"):
         a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
-     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve}[a.command](a)
+     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review}[a.command](a)
 
 
 if __name__ == "__main__":
