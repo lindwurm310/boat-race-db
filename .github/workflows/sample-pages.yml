@@ -5,7 +5,7 @@ on:
     branches: [claude/project-thread-o4gk97]
     paths: [.github/sample-pages.txt]
 permissions:
-  contents: read
+  contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -18,7 +18,8 @@ jobs:
             curl -s -A "Mozilla/5.0 (personal research)" -m 30 -o "pages/$name.html" "$url"; echo "$name $? $(wc -c < pages/$name.html)"
             sleep 2
           done < .github/sample-pages.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: pages
-          path: pages
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar czf pages.tgz pages
+          gh release create "pages-$(date +%s)" pages.tgz --title "sample pages" --notes "page structure sample" --prerelease --target ${{ github.sha }}
