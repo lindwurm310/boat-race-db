@@ -30,11 +30,11 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 import build_db  # noqa: E402
 import fetch  # noqa: E402
-from predict import BASE_FEATS, PERMS2, PERMS3, Predictor, features, load  # noqa: E402
+from predict import V4_FEATS, PERMS2, PERMS3, Predictor, features, load  # noqa: E402
 
 REPO = "lindwurm310/boat-race-db"
 OUT = os.path.join(ROOT, "predictions")
-HISTORY_DAYS = 400  # 選手の過去成績を作るために読む日数
+HISTORY_DAYS = 1460  # 選手の過去成績 (枠別成績・直接対決など) を作るために読む日数。学習時も同じだけ前から読む
 
 
 def http_get(url):
@@ -95,14 +95,14 @@ def cmd_update(a):
 # ---------------- train ----------------
 def cmd_train(a):
     end = last_date(a.db)
-    start = (dt.date.fromisoformat(end) - dt.timedelta(days=a.days)).isoformat()
-    warm = (dt.date.fromisoformat(start) + dt.timedelta(days=30)).isoformat()  # 最初の30日は過去成績の蓄積用
+    warm = (dt.date.fromisoformat(end) - dt.timedelta(days=a.days)).isoformat()
+    start = (dt.date.fromisoformat(warm) - dt.timedelta(days=HISTORY_DAYS)).isoformat()  # 過去成績の蓄積用
     val = (dt.date.fromisoformat(end) - dt.timedelta(days=30)).isoformat()
     raw, _ = load(a.db, start, end)
     df = features(raw)
     tr, va = df[(df.race_date >= warm) & (df.race_date < val)], df[df.race_date >= val]
     print(f"学習 {warm}〜{val} {tr.race_id.nunique()}レース / 検証 {val}〜{end} {va.race_id.nunique()}レース")
-    pr = Predictor(BASE_FEATS, "v3").fit(tr, va)
+    pr = Predictor(V4_FEATS, "v3").fit(tr, va)
     P, Q = pr.probs(va)
     win = va.pivot(index="race_id", columns="lane", values="win").loc[P.index].values
     print(f"検証期間の本命1着率 {(win[np.arange(len(P)), P.values.argmax(1)] == 1).mean():.1%}")
@@ -281,7 +281,7 @@ def main():
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
     ap.add_argument("--date", default=dt.date.today().isoformat(), help="予想・答え合わせする日 (既定: 今日)")
-    ap.add_argument("--days", type=int, default=300, help="train: 直近何日分で学習するか")
+    ap.add_argument("--days", type=int, default=730, help="train: 直近何日分で学習するか")
     a = ap.parse_args()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "check": cmd_check}[
         a.command](a)

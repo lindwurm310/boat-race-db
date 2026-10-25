@@ -57,13 +57,14 @@ def parse_st(s):
         return np.nan
 
 
-def history(df, keys, cols):
-    """keys ごとに cols の合計を日付順に積み上げ、各行に「その日より前」の累計を付ける。"""
+def history(df, keys, cols, query_dates=None):
+    """keys ごとに cols の合計を日付順に積み上げ、各行に「その日より前」の累計を付ける。
+    query_dates を渡すと、各行の日付の代わりにその日付より前の累計を返す。"""
     d = df.groupby(keys + ["race_date"])[cols].sum().reset_index().sort_values("race_date")
     d[cols] = d.groupby(keys)[cols].cumsum()
     d["_t"] = pd.to_datetime(d["race_date"])
     left = df[keys + ["race_date"]].copy()
-    left["_t"] = pd.to_datetime(left["race_date"])
+    left["_t"] = pd.to_datetime(left["race_date"] if query_dates is None else query_dates)
     left["_i"] = np.arange(len(left))
     m = pd.merge_asof(left.sort_values("_t"), d.drop(columns="race_date").sort_values("_t"), on="_t", by=keys,
                       allow_exact_matches=False)
@@ -144,7 +145,85 @@ def features(df, require_result=True):
     df["st_vs_in"] = df["st_avg"] - df["in_st"]
     df["n_a1"] = g["cls"].transform(lambda s: (s == 4).sum())
     df["wind_dir_c"] = df["wind_dir"].astype("category").cat.codes
+    racer_features(df, h)
     return df
+
+
+def history_window(df, keys, cols, days):
+    """history() の直近 days 日だけ版 (その日より前 days 日間の合計)。"""
+    now = history(df, keys, cols)
+    past = history(df, keys, cols, query_dates=pd.to_datetime(df["race_date"]) - pd.Timedelta(days=days))
+    return now - past.values
+
+
+def racer_features(df, h):
+    """v4: 選手ごとの重み (枠の有利不利を除いた強さ・最近の調子・場との相性) と並び (直接対決・隣の艇)。"""
+    lane_base = df[df["finish_raw"].notna()].groupby("lane")["win"].mean()
+    t3_base = df[df["finish_raw"].notna()].assign(t3=df["finish"] <= 3).groupby("lane")["t3"].mean()
+    h = h.copy()
+    h["jcd"] = df["jcd"]
+    # 枠番から期待される 1着・3着内 との差 (外枠で勝つほど高く評価される)
+    h["ew"] = (df["lane"].map(lane_base) * h["n"]).values
+    h["e3"] = (df["lane"].map(t3_base) * h["n"]).values
+    cols = ["n", "w", "t3", "ew", "e3"]
+    k = 20
+    for name, days in [("all", None), ("365", 365), ("90", 90)]:
+        r = history(h, ["racer_no"], cols) if days is None else history_window(h, ["racer_no"], cols, days)
+        df[f"skill_w_{name}"] = (r["w"] - r["ew"]) / (r["n"] + k)
+        df[f"skill_t3_{name}"] = (r["t3"] - r["e3"]) / (r["n"] + k)
+        df[f"n_{name}"] = r["n"]
+    r = history_window(h, ["racer_no", "lane"], ["n", "w"], 365)
+    df["racer_lane_win_365"] = (r["w"] + 10 * df["lane"].map(lane_base)) / (r["n"] + 10)
+    r = history(h, ["racer_no", "jcd"], cols)
+    df["venue_skill"] = (r["w"] - r["ew"]) / (r["n"] + k)
+    df["venue_n"] = r["n"]
+    h2h(df)
+    g = df.groupby("race_id")
+    for c in ["skill_w_all", "skill_w_365", "skill_w_90", "skill_t3_365", "venue_skill", "h2h"]:
+        df[c + "_d"] = df[c] - g[c].transform("mean")
+        df[c + "_rk"] = g[c].rank(ascending=False, method="min")
+    # 並び: 内側・外側の艇の強さ
+    srt = df.sort_values(["race_id", "lane"])
+    for c, name in [("racer_lane_win", "lane_win"), ("skill_w_365", "skill"), ("out_win", "out_win")]:
+        df[f"inner_{name}"] = srt.groupby("race_id")[c].shift(1).reindex(df.index)
+        df[f"outer_{name}"] = srt.groupby("race_id")[c].shift(-1).reindex(df.index)
+
+
+def h2h(df):
+    """今日の相手との過去の直接対決 (同じレースでどちらが先にゴールしたか) の勝率を平均する。"""
+    srt = df.sort_values(["race_date", "race_id", "lane"])
+    racer = srt["racer_no"].values.reshape(-1, 6)
+    fin = srt["finish"].fillna(7).values.reshape(-1, 6)
+    done = srt["finish_raw"].notna().values.reshape(-1, 6).all(1)
+    absent = srt["finish_raw"].fillna("").str.startswith("K").values.reshape(-1, 6)
+    dates = srt["race_date"].values.reshape(-1, 6)[:, 0]
+    met, ahead = {}, {}
+    score = np.zeros((len(racer), 6)); count = np.zeros((len(racer), 6))
+    pairs = [(i, j) for i in range(6) for j in range(6) if i != j]
+    start = 0
+    while start < len(racer):
+        end = start
+        while end < len(racer) and dates[end] == dates[start]:
+            end += 1
+        for r in range(start, end):           # その日のレースは前日までの成績で計算
+            for i, j in pairs:
+                key = (racer[r, i], racer[r, j])
+                m = met.get(key, 0)
+                score[r, i] += (ahead.get(key, 0) + 1) / (m + 2)
+                count[r, i] += m
+        for r in range(start, end):           # その日の結果を足す
+            if not done[r]:
+                continue
+            for i, j in pairs:
+                if absent[r, i] or absent[r, j]:
+                    continue
+                key = (racer[r, i], racer[r, j])
+                met[key] = met.get(key, 0) + 1
+                if fin[r, i] < fin[r, j]:
+                    ahead[key] = ahead.get(key, 0) + 1
+        start = end
+    df["h2h"] = pd.Series((score / 5).ravel(), index=srt.index).reindex(df.index)
+    df["h2h_n"] = pd.Series(count.ravel(), index=srt.index).reindex(df.index)
 
 
 V1_FEATS = ["lane", "jcd", "rno", "age", "weight", "cls", "nat_win_rate", "nat_2_rate", "loc_win_rate",
@@ -158,6 +237,12 @@ BASE_FEATS = V1_FEATS + ["racer_lane_t2", "racer_lane_t3", "st_avg", "st_sd", "f
                          ] + [c + s for c in ["st_avg", "racer_lane_win", "out_win"] for s in ("_d", "_rk")]
 LATE = ["exhibition_time", "ex_d", "ex_rk", "wind_speed", "wave_cm", "wind_dir_c"]
 LATE_FEATS = BASE_FEATS + LATE
+V4_EXTRA = ([f"{a}_{b}" for a in ("skill_w", "skill_t3", "n") for b in ("all", "365", "90")] +
+            ["racer_lane_win_365", "venue_skill", "venue_n", "h2h", "h2h_n"] +
+            [c + s for c in ["skill_w_all", "skill_w_365", "skill_w_90", "skill_t3_365", "venue_skill", "h2h"]
+             for s in ("_d", "_rk")] +
+            [f"{a}_{b}" for a in ("inner", "outer") for b in ("lane_win", "skill", "out_win")])
+V4_FEATS = BASE_FEATS + V4_EXTRA
 # (名前, 特徴量, 学習方法)。"v3" = 1着は softmax、2・3着は Plackett-Luce の2モデルを組み合わせる
 MODELS = {"v1前日": (V1_FEATS, "binary"), "v1直前": (V1_FEATS + LATE[:-1], "binary"),
           "v2前日": (BASE_FEATS, "binary"), "v2直前": (LATE_FEATS, "binary"),
@@ -172,21 +257,25 @@ def fit(train, val, feats, objective="pl", stages=1):
                   bagging_fraction=0.8, bagging_freq=1, lambda_l2=1.0, verbose=-1)
     if objective == "binary":
         params["objective"] = "binary"
-        dt = lgb.Dataset(train[feats], train["win"], categorical_feature=["jcd"])
-        dv = lgb.Dataset(val[feats], val["win"], categorical_feature=["jcd"], reference=dt)
+        dt = lgb.Dataset(train[feats], train["win"], categorical_feature=cats(feats))
+        dv = lgb.Dataset(val[feats], val["win"], categorical_feature=cats(feats), reference=dt)
         m = lgb.train(params, dt, 3000, valid_sets=[dv], callbacks=[lgb.early_stopping(100, verbose=False)])
         m.softmax = False
         return m
     train, val = race_sorted(train), race_sorted(val)
     ft, fv = train["finish"].values.reshape(-1, 6), val["finish"].values.reshape(-1, 6)
     params["objective"] = lambda preds, ds: pl_grad(preds, ft, stages)
-    dt = lgb.Dataset(train[feats], train["win"], categorical_feature=["jcd"], free_raw_data=False)
-    dv = lgb.Dataset(val[feats], val["win"], categorical_feature=["jcd"], reference=dt)
+    dt = lgb.Dataset(train[feats], train["win"], categorical_feature=cats(feats), free_raw_data=False)
+    dv = lgb.Dataset(val[feats], val["win"], categorical_feature=cats(feats), reference=dt)
     feval = lambda preds, ds: ("win_logloss", win_logloss(preds, fv), False)
     m = lgb.train(params, dt, 3000, valid_sets=[dv], feval=feval,
                   callbacks=[lgb.early_stopping(100, verbose=False)])
     m.softmax = True
     return m
+
+
+def cats(feats):
+    return [c for c in ("jcd", "racer_no") if c in feats]
 
 
 def race_sorted(df):
