@@ -243,6 +243,8 @@ V4_EXTRA = ([f"{a}_{b}" for a in ("skill_w", "skill_t3", "n") for b in ("all", "
              for s in ("_d", "_rk")] +
             [f"{a}_{b}" for a in ("inner", "outer") for b in ("lane_win", "skill", "out_win")])
 V4_FEATS = BASE_FEATS + V4_EXTRA
+# 直前情報 (展示タイム・風速・波高) も使う版。風向は公式サイトの表示と DB の表記の対応が取れないので使わない
+V4_LATE = V4_FEATS + ["exhibition_time", "ex_d", "ex_rk", "wind_speed", "wave_cm"]
 # (名前, 特徴量, 学習方法)。"v3" = 1着は softmax、2・3着は Plackett-Luce の2モデルを組み合わせる
 MODELS = {"v1前日": (V1_FEATS, "binary"), "v1直前": (V1_FEATS + LATE[:-1], "binary"),
           "v2前日": (BASE_FEATS, "binary"), "v2直前": (LATE_FEATS, "binary"),
