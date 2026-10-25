@@ -513,7 +513,7 @@ def main():
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
-    ap.add_argument("--date", default=dt.date.today().isoformat(), help="予想・答え合わせする日 (既定: 今日)")
+    ap.add_argument("--date", default=dt.date.today().isoformat(), help="予想・答え合わせする日 (既定: 今日)。today / yesterday / tomorrow も可")
     ap.add_argument("--days", type=int, default=730, help="train: 直近何日分で学習するか")
     ap.add_argument("--no-late", action="store_true", help="train: 直前情報のモデルを作らない (学習が半分の時間になる)")
     ap.add_argument("--within", type=int, default=30, help="live: 締切まで何分以内のレースを見るか")
@@ -523,6 +523,8 @@ def main():
     ap.add_argument("--no", type=int, help="racer: 登録番号")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
     a = ap.parse_args()
+    if a.date in ("today", "yesterday", "tomorrow"):
+        a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
      "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer}[a.command](a)
 
