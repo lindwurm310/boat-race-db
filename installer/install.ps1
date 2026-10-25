@@ -4,7 +4,9 @@
 #   4. DB の取得・更新・モデルの学習  5. ショートカット・PATH・毎朝の自動実行の登録
 param([string]$Dest = "$env:LOCALAPPDATA\BoatRaceYosou", [switch]$Quiet)
 
-$ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 は、外部コマンド (py, pip など) が標準エラーに書いただけで止まってしまうので
+# 全体は Continue にして、止めたい所は -ErrorAction Stop / 終了コードの確認 / throw で止める
+$ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"   # Invoke-WebRequest を速くする
 $Src = Split-Path -Parent $PSScriptRoot
 $PyVersion = "3.12.10"
@@ -23,16 +25,16 @@ function Find-Python {
     $cands = @()
     if (Get-Command py -ErrorAction SilentlyContinue) {
         foreach ($v in "3.13", "3.12", "3.11", "3.10") {
-            $p = (& py "-$v" -c "import sys; print(sys.executable)" 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $p) { $cands += $p.Trim() }
+            try { $p = (& py "-$v" -c "import sys; print(sys.executable)" 2>$null) } catch { $p = $null }
+            if ($LASTEXITCODE -eq 0 -and $p) { $cands += ([string]$p).Trim() }
         }
     }
     $cands += @("$env:LOCALAPPDATA\Programs\Python\Python313\python.exe", "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
                 "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe", "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
     foreach ($p in $cands) {
         if (-not (Test-Path $p)) { continue }
-        $ok = (& $p -c "import sys, struct; print(sys.version_info >= (3, 10) and struct.calcsize('P') == 8)" 2>$null)
-        if ($ok -and $ok.Trim() -eq "True") { return $p }
+        try { $ok = (& $p -c "import sys, struct; print(sys.version_info >= (3, 10) and struct.calcsize('P') == 8)" 2>$null) } catch { $ok = $null }
+        if ($ok -and ([string]$ok).Trim() -eq "True") { return $p }
     }
     return $null
 }
@@ -53,7 +55,7 @@ if (-not $py) {
     if (-not $py) {
         $exe = Join-Path $env:TEMP "python-$PyVersion-amd64.exe"
         Write-Host "python.org からダウンロードしています..."
-        Invoke-WebRequest "https://www.python.org/ftp/python/$PyVersion/python-$PyVersion-amd64.exe" -OutFile $exe
+        Invoke-WebRequest "https://www.python.org/ftp/python/$PyVersion/python-$PyVersion-amd64.exe" -OutFile $exe -ErrorAction Stop
         Start-Process $exe -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_test=0" -Wait
         $py = Find-Python
     }
@@ -63,11 +65,11 @@ Write-Host "Python: $py"
 
 # ---- 2. ファイルのコピー ----
 Step "2/6 ファイルのコピー"
-New-Item -ItemType Directory -Force $Dest | Out-Null
+New-Item -ItemType Directory -Force $Dest -ErrorAction Stop | Out-Null
 if ((Resolve-Path $Src).Path -ne (Resolve-Path $Dest).Path) {
     foreach ($item in "analysis", "installer", "chrome-extension", "fetch.py", "build_db.py", "requirements.txt", "yosou.bat", "README.md") {
         $s = Join-Path $Src $item
-        if (Test-Path $s) { Copy-Item $s -Destination $Dest -Recurse -Force }
+        if (Test-Path $s) { Copy-Item $s -Destination $Dest -Recurse -Force -ErrorAction Stop }
     }
 }
 New-Item -ItemType Directory -Force (Join-Path $Dest "predictions") | Out-Null
@@ -79,12 +81,13 @@ echo ===== %date% %time% >> "%~dp0daily.log"
 call "%~dp0yosou.bat" daily >> "%~dp0daily.log" 2>&1
 call "%~dp0yosou.bat" predict >> "%~dp0daily.log" 2>&1
 "@
-Set-Content -Path (Join-Path $Dest "daily.bat") -Value $daily -Encoding ASCII
+Set-Content -Path (Join-Path $Dest "daily.bat") -Value $daily -Encoding ASCII -ErrorAction Stop
 
 # ---- 3. ライブラリ ----
 Step "3/6 ライブラリのインストール (数分かかります)"
 $venv = Join-Path $Dest ".venv"
 if (-not (Test-Path "$venv\Scripts\python.exe")) { & $py -m venv $venv }
+if (-not (Test-Path "$venv\Scripts\python.exe")) { throw "Python の仮想環境 (.venv) を作れませんでした" }
 $vpy = "$venv\Scripts\python.exe"
 & $vpy -m pip install --upgrade pip --quiet
 & $vpy -m pip install -r (Join-Path $Dest "requirements.txt") --quiet
@@ -100,6 +103,7 @@ if (Test-Path (Join-Path $Dest "boatrace.sqlite")) {
 } else {
     Write-Host "GitHub から DB をダウンロードします (約1.1GB、展開後 約4GB)"
     Yosou setup
+    if (-not (Test-Path (Join-Path $Dest "boatrace.sqlite"))) { throw "DB をダウンロードできませんでした。ネットにつながっているか確認して、もう一度 install.bat を実行してください。" }
 }
 Yosou update
 

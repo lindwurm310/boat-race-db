@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "ボートレース予想",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "boatrace.jp のレースのページに、パソコンで動いている予想 (yosou serve) のおすすめの買い目を表示します。",
   "icons": {"16": "icon16.png", "48": "icon48.png", "128": "icon128.png"},
   "host_permissions": ["http://127.0.0.1:8765/*"],
   "background": {"service_worker": "background.js"},
   "content_scripts": [{
-    "matches": ["https://www.boatrace.jp/owpc/pc/race/*"],
+    "matches": ["https://www.boatrace.jp/*", "https://boatrace.jp/*"],
     "js": ["content.js"],
     "css": ["panel.css"]
   }]

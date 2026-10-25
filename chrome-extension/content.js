@@ -2,7 +2,7 @@
 (() => {
   const q = new URLSearchParams(location.search);
   const hd = q.get("hd"), jcd = q.get("jcd"), rno = q.get("rno");
-  if (!hd || !jcd || !rno) return;
+  const isRace = hd && jcd && rno;
 
   const panel = el("div", {id: "byosou-panel"});
   const head = el("div", {className: "byosou-head"});
@@ -19,7 +19,15 @@
     fold.textContent = panel.classList.contains("byosou-folded") ? "＋" : "－";
   };
   reload.onclick = load;
-  load();
+  if (isRace) {
+    load();
+  } else {
+    // レース以外のページ: 使い方だけ出してたたんでおく
+    reload.disabled = true;
+    body.append(el("div", {className: "byosou-msg",
+      textContent: "レースのページ (出走表・直前情報・オッズ) を開くと、ここにおすすめの買い目が出ます。"}));
+    fold.click();
+  }
 
   function load() {
     body.replaceChildren(el("div", {className: "byosou-msg", textContent: "直前情報とオッズを取得して予想しています…"}));
