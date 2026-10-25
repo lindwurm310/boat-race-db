@@ -6,3 +6,4 @@ odds2tf https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=12&jcd=01&hd=20261025
 odds3t https://www.boatrace.jp/owpc/pc/race/odds3t?rno=12&jcd=01&hd=20261025
 raceresult https://www.boatrace.jp/owpc/pc/race/raceresult?rno=12&jcd=01&hd=20261025
 # rerun 1792928434
+# rerun2

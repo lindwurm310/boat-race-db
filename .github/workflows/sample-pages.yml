@@ -14,8 +14,8 @@ jobs:
       - run: |
           mkdir pages
           while read -r name url; do
-            [ -z "$name" ] && continue
-            curl -s -A "Mozilla/5.0 (personal research)" -m 30 -o "pages/$name.html" "$url"; echo "$name $? $(wc -c < pages/$name.html)"
+            case "$name" in ""|"#"*) continue;; esac
+            curl -s -A "Mozilla/5.0 (personal research)" -m 30 -o "pages/$name.html" "$url" || true; echo "$name $? $(wc -c < pages/$name.html)"
             sleep 2
           done < .github/sample-pages.txt
       - env:
