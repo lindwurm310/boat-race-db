@@ -15,3 +15,7 @@
 | entries | 番組表の出走表（級別・勝率・2連率・モーター/ボート成績） |
 | venues | 場コードと場名 |
 | parse_issues | 解析できなかった行 |
+
+## レース予想
+
+`analysis/` にレース予想・買い方の検証と、毎日の予想・答え合わせのツール（Windows 対応、`yosou.bat`）がある。結果と使い方は [analysis/README.md](analysis/README.md)。
