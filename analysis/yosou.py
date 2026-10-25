@@ -8,6 +8,7 @@
   python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因を集計
   python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 7日ごとに学習し直す
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
+  python analysis/yosou.py serve                 Chrome 拡張機能用のサーバー (boatrace.jp のページにおすすめを表示)
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
   予想は predictions/YYYYMMDD.csv、答え合わせは predictions/YYYYMMDD_check.csv と predictions/log.csv に出る。
@@ -369,6 +370,56 @@ def print_totals(log):
 
 
 # ---------------- live: 直前情報とオッズで買い目を出す ----------------
+def load_models(model_dir):
+    """(番組表だけのモデル, 直前情報のモデル or None, オッズのモデル)"""
+    pre = Predictor.load(model_dir)
+    late_dir = os.path.join(model_dir, "late")
+    late = Predictor.load(late_dir) if os.path.exists(late_dir) else None
+    om = lgb.Booster(model_file=os.path.join(model_dir, "odds.txt"))
+    om.best_iteration = 0
+    return pre, late, om
+
+
+def recommend(d, lv, models, stats):
+    """1レース分の予想。d はそのレースの特徴量 (6行)、lv は live.race_live の結果。
+    (直前情報を使ったか, 表示用の行, 記録用の行, 3連単の上位5点) を返す。"""
+    pre, late, om = models
+    d = d.copy()
+    rid = d["race_id"].iloc[0]
+    ex = {l: b["exhibition_time"] for l, b in lv["boats"].items()}
+    use_late = late is not None and len([v for v in ex.values() if v]) >= 5
+    if use_late:
+        d["exhibition_time"] = d["lane"].map(ex).astype(float)
+        d["ex_d"] = d["exhibition_time"] - d["exhibition_time"].min()
+        d["ex_rk"] = d["exhibition_time"].rank(method="min")
+        d["wind_speed"], d["wave_cm"] = lv["wind_speed"], lv["wave_cm"]
+    pr = late if use_late else pre
+    P, Q = pr.probs(d)
+    _, tri = pr.orders(P, Q)
+    top5 = ["-".join(str(x + 1) for x in PERMS3[k]) for k in np.argsort(-tri[0])[:5]]
+    odds_hat, ev_hat = expected_value(d, P, om, V4_FEATS)
+    p, oh, eh = P.values[0], odds_hat.values[0], ev_hat.values[0]
+    rows, logs = [], []
+    for l in range(1, 7):
+        r = d[d.lane == l].iloc[0]
+        o = lv["odds"].get(l)
+        ev_real = p[l - 1] * o if o else None
+        buy = eh[l - 1] >= EV_MIN and (ev_real is None or ev_real >= EV_MIN)
+        st = stats.get(int(r["racer_no"]), {})
+        course, st_ex = lv["start"].get(l, (None, None))
+        rows.append({"艇": l, "選手": f"{int(r['racer_no'])} {st.get('名前', '')}", "級": r["class"],
+                     "1着率": fmt_pct(st.get("1着率")), "この枠の1着率": fmt_pct(st.get(f"{l}号艇 1着率")),
+                     "展示": ex.get(l), "進入": course, "展示ST": st_ex, "勝率予想": fmt_pct(p[l - 1]),
+                     "予想オッズ": round(float(oh[l - 1]), 1), "期待値(予想オッズ)": round(float(eh[l - 1]), 2),
+                     "オッズ": o, "期待値(実オッズ)": round(ev_real, 2) if ev_real else None,
+                     "買い": "◎" if buy else ""})
+        logs.append(dict(time=dt.datetime.now().isoformat(timespec="seconds"), race_id=rid, lane=l,
+                         model="直前" if use_late else "前日", p=round(float(p[l - 1]), 4),
+                         odds_hat=round(float(oh[l - 1]), 2), odds=o, ev_hat=round(float(eh[l - 1]), 3),
+                         ev=round(ev_real, 3) if ev_real else None, 買い=int(buy)))
+    return use_late, rows, logs, top5
+
+
 def cmd_live(a):
     import live
     feat = day_path(a.date, "_feat.pkl")
@@ -376,11 +427,7 @@ def cmd_live(a):
         print("今日の予想がまだ無いので、先に predict を実行します")
         cmd_predict(a)
     df = pd.read_pickle(feat)
-    pre = Predictor.load(a.model)
-    late_dir = os.path.join(a.model, "late")
-    late = Predictor.load(late_dir) if os.path.exists(late_dir) else None
-    om = lgb.Booster(model_file=os.path.join(a.model, "odds.txt"))
-    om.best_iteration = 0
+    models = load_models(a.model)
     stats = racer_stats(a)
     info = df.drop_duplicates("race_id").set_index("race_id")
     prog = program(a.date, a.raw).drop_duplicates("race_id").set_index("race_id")
@@ -413,45 +460,118 @@ def cmd_live(a):
         except Exception as e:  # 通信エラーなどは飛ばす
             print(f"{venue.get(jcd, jcd)} {rno}R: 取得できませんでした ({e})")
             continue
-        d = df[df.race_id == rid].copy()
-        ex = {l: b["exhibition_time"] for l, b in lv["boats"].items()}
-        use_late = late is not None and len([v for v in ex.values() if v]) >= 5
-        if use_late:
-            d["exhibition_time"] = d["lane"].map(ex).astype(float)
-            d["ex_d"] = d["exhibition_time"] - d["exhibition_time"].min()
-            d["ex_rk"] = d["exhibition_time"].rank(method="min")
-            d["wind_speed"], d["wave_cm"] = lv["wind_speed"], lv["wave_cm"]
-        pr = late if use_late else pre
-        P, _ = pr.probs(d)
-        odds_hat, ev_hat = expected_value(d, P, om, V4_FEATS)
-        p, oh, eh = P.values[0], odds_hat.values[0], ev_hat.values[0]
+        d = df[df.race_id == rid]
+        use_late, rows, lg, top5 = recommend(d, lv, models, stats)
+        logs += lg
         print(f"\n■ {venue.get(jcd, jcd)} {rno}R  締切 {prog['deadline'].get(rid, '')}"
               f"  ({'直前情報あり' if use_late else '展示前: 番組表だけで予想'})"
               f"  風 {lv['wind_speed']}m 波 {lv['wave_cm']}cm")
-        rows = []
-        for l in range(1, 7):
-            r = d[d.lane == l].iloc[0]
-            o = lv["odds"].get(l)
-            ev_real = p[l - 1] * o if o else None
-            buy = eh[l - 1] >= EV_MIN and (ev_real is None or ev_real >= EV_MIN)
-            st = stats.get(int(r["racer_no"]), {})
-            course, st_ex = lv["start"].get(l, (None, None))
-            rows.append({"艇": l, "選手": f"{int(r['racer_no'])} {st.get('名前', '')}", "級": r["class"],
-                         "1着率": fmt_pct(st.get("1着率")), "この枠の1着率": fmt_pct(st.get(f"{l}号艇 1着率")),
-                         "展示": ex.get(l), "進入": course, "展示ST": st_ex, "勝率予想": fmt_pct(p[l - 1]),
-                         "予想オッズ": round(float(oh[l - 1]), 1), "期待値(予想オッズ)": round(float(eh[l - 1]), 2),
-                         "オッズ": o, "期待値(実オッズ)": round(ev_real, 2) if ev_real else None,
-                         "買い": "◎" if buy else ""})
-            logs.append(dict(time=dt.datetime.now().isoformat(timespec="seconds"), race_id=rid, lane=l,
-                             model="直前" if use_late else "前日", p=round(float(p[l - 1]), 4),
-                             odds_hat=round(float(oh[l - 1]), 2), odds=o, ev_hat=round(float(eh[l - 1]), 3),
-                             ev=round(ev_real, 3) if ev_real else None, 買い=int(buy)))
         print(pd.DataFrame(rows).to_string(index=False))
         buys = [x["艇"] for x in rows if x["買い"]]
         print("  おすすめ: " + (f"単勝 {' '.join(map(str, buys))}" if buys else "見送り (予想オッズ・実オッズの両方で期待値1以上の艇なし)"))
+        print("  3連単の上位5点: " + " ".join(top5))
+    path = append_log(logs)
+    if path:
+        print(f"\n記録しました: {path} (翌日の check で結果を集計します)")
+
+
+def append_log(logs):
+    if not logs:
+        return
     path = os.path.join(OUT, "live_log.csv")
+    os.makedirs(OUT, exist_ok=True)
     pd.DataFrame(logs).to_csv(path, mode="a", header=not os.path.exists(path), index=False, encoding="utf-8-sig")
-    print(f"\n記録しました: {path} (翌日の check で結果を集計します)")
+    return path
+
+
+# ---------------- serve: Chrome 拡張機能から呼ばれるサーバー ----------------
+def cmd_serve(a):
+    """http://127.0.0.1:PORT/recommend?hd=20261026&jcd=1&rno=12 に直前情報とオッズを取って予想を返す。
+    拡張機能 (chrome-extension フォルダ) が boatrace.jp のレースのページにこの結果を表示する。"""
+    import copy
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+    import live
+    models = load_models(a.model)
+    con = sqlite3.connect(a.db)
+    venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
+    con.close()
+    days, lock = {}, threading.Lock()
+
+    def day(date):
+        """その日の特徴量と選手成績 (無ければ predict を実行して作る)。"""
+        if date not in days:
+            b = copy.copy(a)
+            b.date = date
+            if not os.path.exists(day_path(date, "_feat.pkl")):
+                print(f"{date} の予想がまだ無いので predict を実行します")
+                try:
+                    cmd_predict(b)
+                except SystemExit as e:  # 番組表がまだ無いなど
+                    raise RuntimeError(str(e))
+            days[date] = (pd.read_pickle(day_path(date, "_feat.pkl")), racer_stats(b))
+        return days[date]
+
+    def answer(q):
+        hd, jcd, rno = q["hd"][0].replace("-", ""), int(q["jcd"][0]), int(q["rno"][0])
+        date = f"{hd[:4]}-{hd[4:6]}-{hd[6:]}"
+        with lock:  # 予想と公式サイトへのアクセスは1つずつ
+            df, stats = day(date)
+            rid = f"{hd}-{jcd:02d}-{rno:02d}"
+            d = df[df.race_id == rid]
+            if len(d) != 6:
+                return 404, {"error": f"{venue.get(jcd, jcd)} {rno}R は予想にありません (6艇そろっていない・番組表に無い)"}
+            lv = live.race_live(jcd, rno, date)
+            use_late, rows, logs, top5 = recommend(d, lv, models, stats)
+            append_log(logs)
+        buys = [x["艇"] for x in rows if x["買い"]]
+        print(f"{dt.datetime.now():%H:%M:%S} {venue.get(jcd, jcd)} {rno}R  おすすめ: "
+              + (f"単勝 {' '.join(map(str, buys))}" if buys else "見送り"))
+        return 200, {"venue": venue.get(jcd, str(jcd)), "rno": rno, "date": date, "late": use_late,
+                     "wind_speed": lv["wind_speed"], "wave_cm": lv["wave_cm"], "rows": rows, "buys": buys,
+                     "top5": top5, "ev_min": EV_MIN}
+
+    def plain(o):
+        """JSON にできる形へ (numpy の数値と NaN を直す)"""
+        if isinstance(o, dict):
+            return {str(k): plain(v) for k, v in o.items()}
+        if isinstance(o, (list, tuple)):
+            return [plain(v) for v in o]
+        if hasattr(o, "item"):
+            o = o.item()
+        if isinstance(o, float) and np.isnan(o):
+            return None
+        return o
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urlparse(self.path)
+            try:
+                if u.path == "/health":
+                    code, body = 200, {"ok": True}
+                elif u.path == "/recommend":
+                    code, body = answer(parse_qs(u.query))
+                else:
+                    code, body = 404, {"error": "not found"}
+            except Exception as e:  # 通信エラーなどはそのまま拡張機能に表示する
+                code, body = 500, {"error": f"{type(e).__name__}: {e}"}
+            data = json.dumps(plain(body), ensure_ascii=False)
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(data.encode("utf-8"))
+
+        def log_message(self, *args):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    print(f"拡張機能用のサーバーを起動しました: http://127.0.0.1:{a.port}  (この画面を閉じると止まります)")
+    print("boatrace.jp のレースのページ (出走表・直前情報・オッズ) を開くと、おすすめが表示されます")
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
 
 def fmt_pct(x):
@@ -509,7 +629,7 @@ def cmd_racer(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer"])
+    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve"])
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
@@ -521,12 +641,13 @@ def main():
     ap.add_argument("--race", help="live: 1レースだけ。場コード-レース番号 (例: 01-12)")
     ap.add_argument("--retrain-days", type=int, default=7, help="daily: 何日ごとに学習し直すか")
     ap.add_argument("--no", type=int, help="racer: 登録番号")
+    ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
     a = ap.parse_args()
     if a.date in ("today", "yesterday", "tomorrow"):
         a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
-     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer}[a.command](a)
+     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve}[a.command](a)
 
 
 if __name__ == "__main__":

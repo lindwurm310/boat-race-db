@@ -18,4 +18,4 @@
 
 ## レース予想
 
-`analysis/` にレース予想・買い方の検証と、毎日の予想・答え合わせのツール（Windows 対応、`yosou.bat`）がある。結果と使い方は [analysis/README.md](analysis/README.md)。
+`analysis/` にレース予想・買い方の検証と、毎日の予想・答え合わせのツール（Windows 対応）がある。Windows では `install.bat` をダブルクリックでインストールでき、boatrace.jp のページにおすすめを出す Chrome 拡張機能（`chrome-extension/`）もある。結果と使い方は [analysis/README.md](analysis/README.md)。

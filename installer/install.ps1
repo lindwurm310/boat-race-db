@@ -65,7 +65,7 @@ Write-Host "Python: $py"
 Step "2/6 ファイルのコピー"
 New-Item -ItemType Directory -Force $Dest | Out-Null
 if ((Resolve-Path $Src).Path -ne (Resolve-Path $Dest).Path) {
-    foreach ($item in "analysis", "installer", "fetch.py", "build_db.py", "requirements.txt", "yosou.bat", "README.md") {
+    foreach ($item in "analysis", "installer", "chrome-extension", "fetch.py", "build_db.py", "requirements.txt", "yosou.bat", "README.md") {
         $s = Join-Path $Src $item
         if (Test-Path $s) { Copy-Item $s -Destination $Dest -Recurse -Force }
     }
@@ -118,6 +118,7 @@ $links = @(
     @("ボートレース 今日の予想", "/k `"`"$yosou`" predict`""),
     @("ボートレース 直前のおすすめ", "/k `"`"$yosou`" live`""),
     @("ボートレース 答え合わせ (昨日)", "/k `"`"$yosou`" check --date yesterday`""),
+    @("ボートレース 拡張機能用サーバー", "/k `"`"$yosou`" serve`""),
     @("ボートレース 選手の成績", "/k `"`"$yosou`" racer && start `"`" `"$Dest\predictions`"`"")
 )
 foreach ($l in $links) {
@@ -143,8 +144,34 @@ if (Ask "毎朝 7:00 に、成績の取り込み・答え合わせ・今日の�
     Write-Host "タスクスケジューラに登録しました (BoatRaceYosou\daily、結果は $Dest\daily.log)"
 }
 
+# ---- Chrome 拡張機能 ----
+$startup = [Environment]::GetFolderPath("Startup")
+if (Ask "パソコンを起動したとき、Chrome 拡張機能用のサーバーを自動で起動しますか? (画面は最小化されます)") {
+    $lnk = $sh.CreateShortcut((Join-Path $startup "ボートレース 拡張機能用サーバー.lnk"))
+    $lnk.TargetPath = "$env:ComSpec"
+    $lnk.Arguments = "/k `"`"$yosou`" serve`""
+    $lnk.WorkingDirectory = $Dest
+    $lnk.WindowStyle = 7
+    $lnk.Save()
+    Write-Host "スタートアップに登録しました"
+}
+$ext = Join-Path $Dest "chrome-extension"
+Write-Host ""
+Write-Host "Chrome 拡張機能の入れ方 (最初の1回だけ):" -ForegroundColor Cyan
+Write-Host "  1. Chrome のアドレス欄に chrome://extensions と入れて開く"
+Write-Host "  2. 右上の「デベロッパー モード」をオンにする"
+Write-Host "  3. 「パッケージ化されていない拡張機能を読み込む」を押して、次のフォルダを選ぶ"
+Write-Host "       $ext"
+Write-Host "  4. デスクトップの「ボートレース 拡張機能用サーバー」を起動したまま、"
+Write-Host "     boatrace.jp のレースのページ (出走表・直前情報・オッズ) を開くと右下におすすめが出ます"
+if (Ask "拡張機能のフォルダを開きますか? (手順3で選ぶフォルダ)") {
+    Start-Process explorer.exe $ext
+    try { Start-Process chrome.exe "chrome://extensions" } catch { }
+}
+
 Write-Host ""
 Write-Host "インストールが終わりました。" -ForegroundColor Green
 Write-Host "  朝: デスクトップの「ボートレース 今日の予想」"
 Write-Host "  レース前: 「ボートレース 直前のおすすめ」(締切30分以内のレース)"
+Write-Host "  Chrome で見るなら: 「ボートレース 拡張機能用サーバー」を起動して boatrace.jp を開く"
 Write-Host "  使い方: $Dest\analysis\README.md"
