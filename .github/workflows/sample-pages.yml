@@ -1,0 +1,24 @@
+name: sample-pages
+# 公式サイト (boatrace.jp) のページ構成を確認するため、数ページだけ取得して artifact に保存する (解析用・一時的)
+on:
+  push:
+    branches: [claude/project-thread-o4gk97]
+    paths: [.github/sample-pages.txt]
+permissions:
+  contents: read
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir pages
+          while read -r name url; do
+            [ -z "$name" ] && continue
+            curl -s -A "Mozilla/5.0 (personal research)" -m 30 -o "pages/$name.html" "$url"; echo "$name $? $(wc -c < pages/$name.html)"
+            sleep 2
+          done < .github/sample-pages.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages
+          path: pages
