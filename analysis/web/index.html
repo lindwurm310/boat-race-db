@@ -46,6 +46,8 @@
   .l1 { background: #fff; } .l2 { background: #000; color: #fff; } .l3 { background: #e60012; color: #fff; }
   .l4 { background: #0068b7; color: #fff; } .l5 { background: #fff100; } .l6 { background: #00a33e; color: #fff; }
   a { color: var(--navy); }
+  .static [data-run], .static .runbar { display: none; }
+  @media (max-width: 700px) { main { padding: 12px 10px 30px; } nav { padding: 0 6px; } nav button { padding: 8px 9px; } header { padding: 8px 12px; } }
 </style>
 </head>
 <body>
@@ -71,11 +73,42 @@ const addDays = (d, n) => { const [y, m, dd] = d.split("-").map(Number); return 
 const pct = v => v == null || v === "" || isNaN(v) ? "" : (v * 100).toFixed(1) + "%";
 const pct0 = v => v == null || v === "" || isNaN(v) ? "" : Math.round(v * 100) + "%";
 
+// サーバー (127.0.0.1) が無いところ (GitHub Pages・iPad) では、毎朝書き出された data/*.json を読むだけ
+const STATIC = !["127.0.0.1", "localhost"].includes(location.hostname);
+if (STATIC) document.documentElement.classList.add("static");
+const hint = t => STATIC ? "。毎朝6時ごろに更新されます" : t;
+let racersCache = null;
 async function api(path) {
+  if (STATIC) return staticApi(path);
   const r = await fetch(path);
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || r.status);
   return j;
+}
+async function staticApi(path) {
+  const u = new URL(path, "http://x");
+  const date = u.searchParams.get("date") || today();
+  const get = async (f, what) => {
+    const r = await fetch(`data/${f}?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`${what}はまだありません`);
+    return r.json();
+  };
+  switch (u.pathname) {
+    case "/api/status": return get("status.json", "状態");
+    case "/api/job": return {cmd: null};
+    case "/api/predictions": return get(`predictions/${date}.json`, `${date} の予想`);
+    case "/api/week": return get(`week/${date}.json`, `${date} からの1週間の予想`);
+    case "/api/check": return get(`check/${date}.json`, `${date} の答え合わせ`);
+    case "/api/totals": return get("totals.json", "答え合わせの記録");
+    case "/api/reviews": return get("reviews.json", "振り返り");
+    case "/api/racers": {
+      racersCache = racersCache || (await get("racers.json", "選手の成績")).rows;
+      const q = (u.searchParams.get("q") || "").replace(/[ \u3000]/g, "");
+      if (!q) throw new Error("登録番号か名前を入れてください");
+      return {rows: racersCache.filter(r => String(r["登録番号"]) === q || String(r["名前"] || "").replace(/[ \u3000]/g, "").includes(q)).slice(0, 30)};
+    }
+  }
+  throw new Error("この画面はパソコンのサーバーでだけ使えます");
 }
 async function run(cmd, date, extra = {}) {
   const r = await fetch("/api/run", {method: "POST", headers: {"Content-Type": "application/json", "X-Yosou": "1"},
@@ -90,6 +123,7 @@ const JOBNAME = {predict: "予想", week: "1週間の予想", check: "答え合�
   train: "学習", update: "データの取り込み", daily: "毎朝の処理", setup: "DBのダウンロード"};
 let jobTimer = null, jobWasRunning = false, dismissed = null;
 async function pollJob(force) {
+  if (STATIC) return;
   let j;
   try { j = await api("/api/job"); } catch { return; }
   const box = $("#job");
@@ -119,6 +153,10 @@ async function pollJob(force) {
 async function loadStatus() {
   try {
     const s = await api("/api/status");
+    if (STATIC) {
+      $("#status").textContent = `更新: ${(s.updated || "").replace("T", " ")}　データ: ${s.db_last || "?"} まで　モデル: ${s.trained || "?"} までで学習`;
+      return;
+    }
     $("#status").textContent = `データ: ${s.db ? (s.db_last || "?") + " まで" : "まだありません"}　` +
       `モデル: ${s.model ? (s.trained || "?") + " までで学習" : "まだありません"}　学習に使う装置: ${s.device === "gpu" ? "GPU" : "CPU"}`;
   } catch (e) { $("#status").textContent = "サーバーに繋がりません"; }
@@ -173,10 +211,10 @@ const PAGES = {
         if (only.checked) rows = rows.filter(r => r["単勝買い目"]);
         out.replaceChildren(
           h("p", {className: "note"}, `${j.rows.length}レース。単勝の買い目 (期待値1以上) があるのは ${nbuy}レース。` +
-            "「直前情報」を開くと、展示タイムと実際のオッズでの予想がページの右下に出ます。"),
+            (STATIC ? "「直前情報」で公式サイトのそのレースを開きます。" : "「直前情報」を開くと、展示タイムと実際のオッズでの予想がページの右下に出ます。")),
           table(PRED_COLS(d.value), rows, buyRow));
       } catch (e) {
-        out.replaceChildren(h("p", {}, e.message, "。「予想する」を押してください (番組表は前日〜当日朝に公開されます)。"));
+        out.replaceChildren(h("p", {}, e.message, hint("。「予想する」を押してください (番組表は前日〜当日朝に公開されます)。")));
       }
     };
     d.onchange = load; only.onchange = load;
@@ -200,7 +238,7 @@ const PAGES = {
           out.append(h("h3", {textContent: `${day}  (${rows.length}レース、単勝の買い目 ${rows.filter(r => r["単勝買い目"]).length})`}),
             table(PRED_COLS(day), rows, buyRow));
         });
-      } catch (e) { out.replaceChildren(h("p", {}, e.message, "。「1週間分を予想」を押してください。")); }
+      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「1週間分を予想」を押してください。"))); }
     };
     d.onchange = load;
     el.append(h("div", {className: "bar"}, d, h("span", {textContent: "から7日分"}),
@@ -229,7 +267,7 @@ const PAGES = {
             ["本命1着", r => r["本命1着"] === true || r["本命1着"] === "True" ? h("span", {className: "ok", textContent: "○"}) : h("span", {className: "ng", textContent: "×"})],
             ["本命の着", "本命の着"], ["決まり手", "決まり手"], ["本命のST順位", "本命のST順位"], ["風速", "風速"], ["波", "波"],
             ["3連単配当", "三連単配当"], ["単勝買い", "単勝点数"], ["単勝払戻", "単勝払戻"]], j.rows));
-      } catch (e) { out.replaceChildren(h("p", {}, e.message, "。「答え合わせ」を押してください (成績は翌日以降に公開されます)。")); }
+      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「答え合わせ」を押してください (成績は翌日以降に公開されます)。"))); }
       try {
         const t = await api("/api/totals");
         tot.replaceChildren(h("h3", {textContent: "これまでの記録"}),
@@ -249,7 +287,7 @@ const PAGES = {
     const d = h("input", {type: "date", value: today()});
     const tr = h("input", {type: "checkbox"});
     const out = h("div");
-    el.append(h("div", {className: "bar"}, d, h("span", {textContent: "の前日までの7日間を"}),
+    el.append(h("div", {className: "bar runbar"}, d, h("span", {textContent: "の前日までの7日間を"}),
       h("button", {className: "btn", textContent: "振り返る", dataset: {run: 1}, onclick: () => run("review", d.value, {train: tr.checked})}),
       h("label", {}, tr, " そのあと学習し直す (40分〜1時間半)")),
       h("p", {className: "note", textContent: "毎朝の自動実行を登録していれば、月曜に自動で振り返ります。"}), out);
@@ -288,6 +326,16 @@ const PAGES = {
   data: {title: "学習・データ", async render(el) {
     let s = {};
     try { s = await api("/api/status"); } catch {}
+    if (STATIC) {
+      const d = s.dates || {};
+      el.append(h("div", {className: "card"},
+        h("div", {}, `最終更新: ${(s.updated || "?").replace("T", " ")}`),
+        h("div", {}, `データ (DB): ${s.db_last || "?"} の成績まで`),
+        h("div", {}, `予想モデル: ${s.trained || "?"} のデータまでで学習`),
+        h("div", {}, `予想 ${(d.predictions || []).length}日分・答え合わせ ${(d.check || []).length}日分`),
+        h("div", {className: "note", textContent: "このページは GitHub Actions が毎朝6時ごろに自動で更新します (成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 7日ごとに学習し直し → 今日と明日の予想)。展示タイム・実際のオッズでの直前のおすすめは、パソコンのサーバーと Chrome 拡張機能でだけ見られます。"})));
+      return;
+    }
     const row = (label, cmd, note) => h("div", {className: "card"},
       h("div", {className: "bar"}, h("button", {className: "btn", textContent: label, dataset: {run: 1}, onclick: () => run(cmd, today())}),
         h("span", {className: "note", textContent: note})));

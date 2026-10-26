@@ -216,6 +216,15 @@ LightGBM で各艇の1着確率を出し、2・3着は Harville 型（1着を除
 
 **GPU**: 学習は LightGBM の GPU 版（OpenCL）を使う。NVIDIA・AMD・Intel のグラフィックドライバーが入っていれば自動で GPU、使えなければ CPU の全コアで学習する（`set YOSOU_DEVICE=cpu` で CPU に固定）。特徴量づくり（過去成績の集計）は CPU。
 
+### iPad で見る（サーバーなし）
+
+GitHub Actions（`.github/workflows/yosou-page.yml`）が毎朝 6:00 に、成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 今日と明日の予想をして、GitHub Pages に置く。7日ごとに学習し直す（次の日の予想から使う）。iPad の Safari で https://lindwurm310.github.io/boat-race-db/ を開けば、操作画面と同じ表（今日の予想・1週間・答え合わせ・振り返り・選手の成績）が見られる。
+
+- 最初の1回: このワークフローが main にある状態で、Actions タブの「yosou-page」→「Run workflow」で実行（初回は DB の取得と学習で1〜2時間）。終わったら Settings → Pages → Source を「Deploy from a branch」「gh-pages」「/ (root)」にする
+- リポジトリが公開なので、ページも URL を知っていれば誰でも見られる
+- 展示タイム・実際のオッズでの直前のおすすめはリアルタイムには出せない（パソコンのサーバーと Chrome 拡張機能でだけ）
+- DB とモデルは Actions のキャッシュに置く。7日使われないと消えるが、そのときは次の実行で取り直して学習する
+
 ### Chrome 拡張機能
 
 ツールバーのボタンで操作画面を開ける。boatrace.jp のレースのページ（出走表・直前情報・オッズ）を開くと、右下に「おすすめ」（単勝の買い目・各艇の勝率予想・期待値・3連単の上位5点）が出る。展示タイムと実際のオッズを使った予想で、表示した買い目は `live_log.csv` に記録され翌日の答え合わせに入る。
