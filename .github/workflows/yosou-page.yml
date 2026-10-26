@@ -1,0 +1,99 @@
+name: yosou-page
+# 毎朝 6:00 (日本時間) に予想・答え合わせ・振り返りを作り、GitHub Pages (gh-pages ブランチ) に置く。
+# iPad などからサーバーなしで見るため。Settings → Pages → Source を「Deploy from a branch」「gh-pages」にしておく。
+on:
+  schedule:
+    - cron: "0 21 * * *"   # UTC 21:00 = 日本時間 6:00
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: yosou-page
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  PYTHONUTF8: "1"
+
+jobs:
+  page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: checkout gh-pages (これまでの予想と答え合わせ)
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null; then
+            git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          else
+            mkdir site && git -C site init -b gh-pages && git -C site remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          fi
+          mkdir -p predictions site/history
+          cp -r site/history/. predictions/ || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: restore DB
+        uses: actions/cache@v4
+        with:
+          path: boatrace.sqlite
+          key: db-${{ github.run_id }}
+          restore-keys: db-
+      - name: restore model
+        uses: actions/cache@v4
+        with:
+          path: model
+          key: model-${{ github.run_id }}
+          restore-keys: model-
+
+      - name: DB (無ければ Release から取得)
+        run: |
+          if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
+
+      - name: 取り込み・昨日の答え合わせ・(月曜は)先週の振り返り
+        # モデルが無いときだけここで学習する。7日ごとの学習し直しはページを出したあとにする
+        run: |
+          if [ -f model/win.txt ]; then R=100000; else R=0; fi
+          python analysis/yosou.py daily --retrain-days $R
+
+      - name: 今日から1週間 (番組表が出ている日) の予想
+        run: python analysis/yosou.py week || true
+
+      - name: ページを作る
+        run: |
+          python analysis/site.py --out site
+          find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
+          touch site/.nojekyll
+
+      - name: gh-pages に置く
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "予想 $(date +%F)" || echo "変更なし"
+          git push origin gh-pages
+
+      - name: 7日ごとに学習し直す (次の日の予想から使う)
+        run: |
+          AGE=$(python - <<'PY'
+          import datetime as dt, json, os, sys
+          sys.path.insert(0, "analysis")
+          import yosou
+          p = "model/trained.json"
+          if not os.path.exists(p):
+              print(999)
+          else:
+              end = json.load(open(p, encoding="utf-8"))["data_end"]
+              print((dt.date.fromisoformat(yosou.last_date("boatrace.sqlite")) - dt.date.fromisoformat(end)).days)
+          PY
+          )
+          echo "前回の学習から ${AGE} 日"
+          if [ "$AGE" -ge 7 ]; then python analysis/yosou.py train; fi

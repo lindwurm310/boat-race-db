@@ -2,3 +2,5 @@ raw/
 *.sqlite
 *.sqlite.gz
 __pycache__/
+model/
+predictions/
