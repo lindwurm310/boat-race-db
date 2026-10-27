@@ -1,0 +1,28 @@
+name: grab-results
+# 一時的: 当日の結果ページ (boatrace.jp raceresult) をまとめて取得して prerelease に置く (パーサー開発用)
+on:
+  push:
+    branches: [claude/project-thread-cvy7io]
+    paths: [.github/workflows/grab-results.yml]
+permissions:
+  contents: write
+env:
+  TZ: Asia/Tokyo
+jobs:
+  grab:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          D=$(date +%Y%m%d)
+          git clone -q --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          mkdir -p pages
+          tail -n +2 site/history/$D.csv | cut -d, -f1 | while read rid; do
+            j=${rid:9:2}; r=$((10#${rid:12:2}))
+            curl -s -m 30 -A "Mozilla/5.0 (personal research; low-rate)" -o pages/$rid.html "https://www.boatrace.jp/owpc/pc/race/raceresult?rno=$r&jcd=$j&hd=$D"
+            sleep 1
+          done
+          tar czf pages.tgz pages
+          ls pages | wc -l
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "results-$(date +%s)" pages.tgz --repo ${{ github.repository }} --title "results $(date +%F_%H%M)" --notes "raceresult pages" --prerelease
