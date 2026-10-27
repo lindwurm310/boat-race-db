@@ -194,6 +194,9 @@ class App:
         if not os.path.exists(path):
             return 404, {"error": f"{date} の答え合わせはまだありません"}
         out = {"date": date, "rows": read_csv(path)}
+        kp = self.y.day_path(date, "_kaime.csv")
+        if os.path.exists(kp):  # 3連単・3連複の買い方ごとの払戻
+            out["kaime"] = read_csv(kp)
         lg = os.path.join(self.y.OUT, "log.csv")
         if os.path.exists(lg):
             t = pd.read_csv(lg, encoding="utf-8-sig")

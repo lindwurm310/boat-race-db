@@ -1,0 +1,51 @@
+name: yosou-check-today
+# 毎晩 22:30 (日本時間) に、その日の予想を boatrace.jp の結果ページで答え合わせして GitHub Pages に置く。
+# 成績ファイル (K) は翌日にならないと出ないので当日はこちら。翌朝の yosou-page が公式の成績ファイルでやり直す。
+on:
+  schedule:
+    - cron: "30 13 * * *"   # UTC 13:30 = 日本時間 22:30
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: yosou-page
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  PYTHONUTF8: "1"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: checkout gh-pages (これまでの予想と答え合わせ)
+        run: |
+          git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          mkdir -p predictions
+          cp -r site/history/. predictions/
+          cp site/data/status.json status.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 今日の答え合わせ (1レース1秒、全場で数分〜30分)
+        run: python analysis/yosou.py check --date today
+      - name: ページを作る
+        run: |
+          python analysis/site.py --out site
+          cp status.json site/data/status.json   # DB・モデルの情報は朝の実行のものをそのまま使う
+          find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
+      - name: gh-pages に置く
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "当日の答え合わせ $(date +%F)" || echo "変更なし"
+          git push origin gh-pages
