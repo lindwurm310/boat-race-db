@@ -177,6 +177,54 @@ function table(cols, rows, rowClass) {
   return h("div", {className: "tw"}, t);
 }
 const lane = n => h("span", {className: `lane l${n}`, textContent: n});
+const yen = v => (v > 0 ? "+" : "") + Math.round(v).toLocaleString() + "円";
+// これまでの答え合わせ (log.csv) の買い方ごとの累計
+function kaimeTotals(rows) {
+  const pats = [...new Set(rows.flatMap(r => Object.keys(r)).filter(c => c.endsWith(" 投資")).map(c => c.slice(0, -3)))];
+  if (!pats.length) return null;
+  const sum = pats.map(p => {
+    const use = rows.filter(r => r[p + " 投資"] > 0);
+    const cost = use.reduce((a, r) => a + +r[p + " 投資"], 0), got = use.reduce((a, r) => a + +r[p + " 払戻"], 0);
+    return {name: p, days: use.length, cost, got, bal: got - cost, rate: cost ? got / cost : 0};
+  });
+  return h("div", {}, h("h3", {textContent: "3連単・3連複 買い方ごとの累計"}),
+    h("div", {className: "tw"}, table([["券種・買い方", "name", "l"], ["日数", "days"], ["投資", r => r.cost.toLocaleString() + "円"],
+      ["払戻", r => r.got.toLocaleString() + "円"], ["収支", r => h("span", {className: r.bal > 0 ? "ok" : "err", textContent: yen(r.bal)})],
+      ["回収率", r => pct(r.rate)]], sum)));
+}
+// 3連単・3連複を買い方ごとに買っていたらの収支。◎○▲△□ は1着確率の高い順 (analysis/kaime.py)
+function kaimeView(rows) {
+  const pats = Object.keys(rows[0]).filter(c => c.endsWith(" 点数")).map(c => c.slice(0, -3));
+  const sel = h("select", {}, [["0", "全レース"], ["0.5", "本命1着確率 50%以上のレースだけ"], ["0.7", "本命1着確率 70%以上のレースだけ"],
+    ["-0.5", "本命1着確率 50%未満のレースだけ"]].map(([v, t]) => h("option", {value: v, textContent: t})));
+  sel.value = state.kaimeMin || "0";
+  const box = h("div");
+  const draw = () => {
+    state.kaimeMin = sel.value;
+    const m = +sel.value;
+    const rs = rows.filter(r => m >= 0 ? r["本命1着確率"] >= m : r["本命1着確率"] < -m);
+    const sum = pats.map(p => {
+      const cost = rs.reduce((a, r) => a + r[p + " 点数"] * 100, 0), got = rs.reduce((a, r) => a + r[p + " 払戻"], 0);
+      return {name: p, cost, got, bal: got - cost, rate: cost ? got / cost : 0, hit: rs.filter(r => r[p + " 的中"] > 0).length};
+    });
+    const best = Math.max(...sum.map(x => x.bal));
+    const sign = v => h("span", {className: v > 0 ? "ok" : "err", textContent: yen(v)});
+    box.replaceChildren(
+      h("div", {className: "tw"}, table([["券種・買い方", "name", "l"], ["レース", () => rs.length], ["的中", r => `${r.hit}R`],
+        ["的中率", r => pct0(rs.length ? r.hit / rs.length : 0)], ["投資", r => r.cost.toLocaleString() + "円"],
+        ["払戻", r => r.got.toLocaleString() + "円"], ["収支", r => sign(r.bal)], ["回収率", r => pct(r.rate)]], sum,
+        r => r.bal === best && best > 0 ? "buy" : "")),
+      h("h4", {textContent: "レースごとの払戻 (100円×点数を買った場合)"}),
+      h("div", {className: "tw"}, table([["場", "場"], ["R", "R"], ["印 (◎○▲△□)", "印"], ["結果", "結果"], ["1〜3着の印", "結果の印"],
+        ["3連単", r => r["3連単配当"] == null ? "" : r["3連単配当"].toLocaleString()],
+        ["3連複", r => r["3連複配当"] == null ? "" : r["3連複配当"].toLocaleString()],
+        ...pats.map(p => [p.replace(/ \(\d+点\)/, ""), r => r[p + " 的中"] > 0 ? h("span", {className: "ok", textContent: r[p + " 払戻"].toLocaleString()}) : h("span", {className: "ng", textContent: "×"})])], rs)));
+  };
+  sel.onchange = draw;
+  draw();
+  return h("div", {className: "card"}, h("h3", {textContent: "3連単・3連複 買い方ごとの収支 (1点100円)"}),
+    h("div", {className: "bar"}, sel), h("p", {className: "note", textContent: "◎○▲△□ = 予想の1着確率が高い順。欠場などで返還になった買い目は100円を払戻に入れています。一番収支の良い買い方を赤く塗っています。"}), box);
+}
 const raceLink = (r, date) => {
   const [, jcd, rno] = String(r.race_id).split("-");
   const hd = (date || r["日付"] || "").replaceAll("-", "");
@@ -261,20 +309,22 @@ const PAGES = {
             kp("3連単上位5点の的中率", pct(s["三連単上位5点的中率"])), kp("3連単上位5点の回収率", pct(s["三連単上位5点回収率"])),
             kp(`単勝の買い目 ${s["単勝期待値買い_点数"] ?? 0}点 回収率`, pct(s["単勝期待値買い_回収率"])),
             kp(`直前の買い目 ${s["live買い_点数"] ?? 0}点 回収率`, pct(s["live買い_回収率"]))),
+          j.kaime && j.kaime.length ? kaimeView(j.kaime) : h("p", {className: "note", textContent: "3連単・3連複の買い方ごとの収支は、この日はまだありません (答え合わせをやり直すと出ます)。"}),
           h("h3", {textContent: "レースごと"}),
           table([["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命1着確率", r => pct0(r["本命1着確率"])],
             ["予想着順", "予想着順"], ["結果", "結果"],
             ["本命1着", r => r["本命1着"] === true || r["本命1着"] === "True" ? h("span", {className: "ok", textContent: "○"}) : h("span", {className: "ng", textContent: "×"})],
             ["本命の着", "本命の着"], ["決まり手", "決まり手"], ["本命のST順位", "本命のST順位"], ["風速", "風速"], ["波", "波"],
             ["3連単配当", "三連単配当"], ["単勝買い", "単勝点数"], ["単勝払戻", "単勝払戻"]], j.rows));
-      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「答え合わせ」を押してください (成績は翌日以降に公開されます)。"))); }
+      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「答え合わせ」を押してください (当日は boatrace.jp の結果ページ、翌日からは公式の成績ファイルで答え合わせします)。"))); }
       try {
         const t = await api("/api/totals");
         tot.replaceChildren(h("h3", {textContent: "これまでの記録"}),
           table([["日付", "date"], ["レース", "races"], ["本命1着率", r => pct(r["本命1着率"])], ["予想着順", r => pct(r["予想着順的中率"])],
             ["3連単5点 的中", r => pct(r["三連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["三連単上位5点回収率"])],
             ["単勝 点数", "単勝期待値買い_点数"], ["単勝 回収", r => pct(r["単勝期待値買い_回収率"])],
-            ["直前 点数", "live買い_点数"], ["直前 回収", r => pct(r["live買い_回収率"])]], t.rows.slice().reverse()));
+            ["直前 点数", "live買い_点数"], ["直前 回収", r => pct(r["live買い_回収率"])]], t.rows.slice().reverse()),
+          kaimeTotals(t.rows));
       } catch { tot.replaceChildren(); }
     };
     d.onchange = load;

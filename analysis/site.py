@@ -58,7 +58,9 @@ def main():
             if log is not None:
                 r = log[log["date"] == d]
                 s = r.iloc[-1].to_dict() if len(r) else None
-            dump(os.path.join(data, "check", d + ".json"), {"date": d, "rows": rows(p), "summary": s})
+            kp = os.path.join(a.pred, f[:8] + "_kaime.csv")
+            kaime = rows(kp) if os.path.exists(kp) else None
+            dump(os.path.join(data, "check", d + ".json"), {"date": d, "rows": rows(p), "summary": s, "kaime": kaime})
             dates["check"].append(d)
         elif f.startswith("week_") and f.endswith(".csv"):
             d = iso(f[5:13])

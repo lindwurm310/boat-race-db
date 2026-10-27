@@ -5,7 +5,7 @@
   python analysis/yosou.py train                 直近のデータでモデルを学習し直す (model フォルダに保存)
   python analysis/yosou.py predict --date 2026-10-26   番組表を取得してその日の全レースを予想
   python analysis/yosou.py live                  締切30分以内のレースの直前情報とオッズを取って、おすすめの買い目を表示
-  python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因を集計
+  python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因・3連単/3連複の買い方ごとの収支を集計 (当日は結果ページから)
   python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 7日ごとに学習し直す
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
@@ -258,6 +258,32 @@ def results_of(date, raw):
         pays, columns=["race_id", "bet_type", "combination", "payout", "popularity"]))
 
 
+def results_web(date, rids):
+    """成績ファイル (K) は翌日にならないと出ないので、当日は boatrace.jp の結果ページから取る (1レース1秒以上あける)。
+    results_of と同じ形で返す。まだ終わっていないレースは入らない。"""
+    import live
+    races, res, pays = [], [], []
+    for rid in rids:
+        jcd, rno = int(rid.split("-")[1]), int(rid.split("-")[2])
+        try:
+            r = live.race_result(jcd, rno, date)
+        except Exception as e:  # 通信エラーなどは飛ばす
+            print(f"{rid}: 取得できませんでした ({e})")
+            continue
+        if r is None:
+            continue
+        races.append(dict(race_id=rid, technique=r["technique"], wind_speed=r["wind_speed"], wave_cm=r["wave_cm"]))
+        for lane, f in r["finish"].items():
+            course, st = r["st"].get(lane, (None, None))
+            res.append(dict(race_id=rid, lane=lane, course=course, start_timing=st, finish_raw=f,
+                            finish=int(f) if f.isdigit() else None))
+        pays += [(rid, *p) for p in r["payouts"]]
+    if not races:
+        return None, None
+    return pd.DataFrame(races).set_index("race_id"), (pd.DataFrame(res), pd.DataFrame(
+        pays, columns=["race_id", "bet_type", "combination", "payout", "popularity"]))
+
+
 def ev_check(r, rid, tan):
     """予想の単勝買い目 (期待値 1 以上) の点数・的中・払戻。"""
     if "単勝買い目" not in r or not isinstance(r["単勝買い目"], str) or not r["単勝買い目"].strip():
@@ -274,7 +300,10 @@ def cmd_check(a):
     pred = pd.read_csv(path, encoding="utf-8-sig", dtype={"単勝買い目": str}).set_index("race_id")
     races, rp = results_of(a.date, a.raw)
     if races is None:
-        sys.exit(f"{a.date} の成績がまだ公開されていません (公式サイトでは翌日以降)")
+        print(f"{a.date} の成績ファイルはまだ公開されていないので、boatrace.jp の結果ページから取ります (1レース1秒)")
+        races, rp = results_web(a.date, list(pred.index))
+    if races is None:
+        sys.exit(f"{a.date} の結果がまだありません")
     res, pay = rp
     fin = res.pivot(index="race_id", columns="lane", values="finish")
     st = res.assign(st=res["start_timing"].map(lambda s: -float(s[1:]) if isinstance(s, str) and s[:1] == "F"
@@ -331,6 +360,7 @@ def cmd_check(a):
             print(f"  堅いと見たのに負けたレース ({len(strong)}):")
             print(strong[["場", "R", "本命", "本命1着確率", "結果", "決まり手", "本命のST順位", "風速", "波"]]
                   .to_string(index=False))
+    summary |= check_kaime(a.date, pred[pred.index.isin(fin.index)], pay, res)
     summary |= check_live(a.date, tan)
     log = os.path.join(OUT, "log.csv")
     old = pd.read_csv(log, encoding="utf-8-sig") if os.path.exists(log) else pd.DataFrame()
@@ -339,6 +369,27 @@ def cmd_check(a):
     pd.concat([old, pd.DataFrame([summary])]).to_csv(log, index=False, encoding="utf-8-sig")
     print("\n保存しました:", out, "/", log)
     print_totals(log)
+
+
+def check_kaime(date, pred, pay, res):
+    """3連単・3連複を買い方ごと (◎○▲△□ のフォーメーション・流し・BOX) に買っていたらの収支 (analysis/kaime.py)。
+    レースごとは predictions/YYYYMMDD_kaime.csv。"""
+    import kaime
+    void = {}
+    for rid, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
+        void.setdefault(rid, set()).add(int(lane))
+    k = kaime.race_rows(pred, kaime.payout_table(pay), void)
+    if k.empty:
+        return {}
+    k.to_csv(day_path(date, "_kaime.csv"), index=False, encoding="utf-8-sig")
+    s = kaime.summary(k)
+    print(f"\n買い方ごとの収支 (1点100円、{len(k)}レース全部買った場合)")
+    for _, r in s.iterrows():
+        print(f"  {r['券種']} {r['買い方']:<22} 投資 {r['投資']:>7,}円 払戻 {r['払戻']:>7,}円 収支 {r['収支']:>+8,}円 "
+              f"回収率 {r['回収率']:6.1%} 的中 {r['的中レース']}R")
+    marks = k["結果の印"].value_counts()
+    print("  1〜3着の印 (多い順):", "、".join(f"{m} {v}" for m, v in marks.head(8).items()))
+    return {f"{r['券種']} {r['買い方']} {c}": r[c] for _, r in s.iterrows() for c in ("投資", "払戻")}
 
 
 def check_live(date, tan):
