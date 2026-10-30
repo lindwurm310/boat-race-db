@@ -81,6 +81,10 @@ def main():
         with open(os.path.join(a.pred, f), encoding="utf-8-sig") as fh:
             items.append({"file": f, "text": fh.read()})
     dump(os.path.join(data, "reviews.json"), {"items": items})
+    adv = os.path.join(HERE, "advice.md")  # 「今週のまとめ」に載せるアドバイス (手で書く)
+    if os.path.exists(adv):
+        with open(adv, encoding="utf-8-sig") as fh:
+            dump(os.path.join(data, "advice.json"), {"text": fh.read()})
     if os.path.exists(a.db) and not any(f.endswith("_racers.pkl") for f in files):
         import yosou  # 直近1年の選手成績を作る (predictions/YYYYMMDD_racers.pkl)
         yosou.racer_stats(argparse.Namespace(date=dt.date.today().isoformat(), db=a.db))
