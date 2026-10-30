@@ -72,6 +72,9 @@ def main():
     s = seiseki.build(a.pred)
     if s:
         dump(os.path.join(data, "seiseki.json"), s)
+    s = seiseki.build(os.path.join(a.pred, "backtest")) or seiseki.saved()  # 過去10年を予想し直した分
+    if s:
+        dump(os.path.join(data, "seiseki_backtest.json"), s)
     reviews = sorted([f for f in files if f.startswith("review_") and f.endswith(".txt")], reverse=True)[:20]
     items = []
     for f in reviews:

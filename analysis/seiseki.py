@@ -2,6 +2,7 @@
 的中率・回収率などを期間ごと (全期間・直近30日・直近7日) と日ごとに集計し、良い悪いを「備考」に書く。
 
   python analysis/yosou.py seiseki            画面に出して predictions/seiseki.csv・seiseki_days.csv に保存
+  python analysis/yosou.py seiseki --backtest  過去10年を予想し直した分 (yosou.py backtest) の成績
 
 備考の目安:
   回収率  100%以上 = 黒字 / 90〜100% = あと少し / 75〜90% = 赤字だが、でたらめに買う (払戻率 約75%) よりは良い / 75%未満 = でたらめ以下
@@ -9,6 +10,7 @@
   的中が少ない (10回未満) ときは、1回の大穴で大きく変わるので参考程度
 """
 import datetime as dt
+import json
 import os
 
 import pandas as pd
@@ -17,7 +19,8 @@ PAYBACK = 0.75   # ボートレースの払戻率 (控除率 25%)。でたらめ
 FEW_HITS = 10    # これより的中が少ないと回収率は当てにならない
 NEAR = 0.03      # 的中率が予想とこのくらいずれるまでは「予想どおり」
 TREND = 0.10     # 直近7日の回収率が全期間とこれ以上違えば備考に書く
-PERIODS = [("全期間", None), ("直近30日", 30), ("直近7日", 7)]
+PERIODS = [("全期間", None), ("直近1年", 365), ("直近30日", 30), ("直近7日", 7)]
+RECENT_DAYS = 60  # 日ごとの表に出す日数 (長い期間は月ごと・年ごとの表で見る)
 
 
 def load(out):
@@ -30,14 +33,15 @@ def load(out):
         d = f"{f[:4]}-{f[4:6]}-{f[6:8]}"
         c = pd.read_csv(os.path.join(out, f), encoding="utf-8-sig")
         pred = os.path.join(out, f[:8] + ".csv")
-        if os.path.exists(pred):  # 予想したときの3連単上位5点の的中確率 (予想と実際を比べる)
+        if os.path.exists(pred) and "3連単上位5点の的中確率" not in c:  # 予想したときの3連単上位5点の的中確率 (予想と実際を比べる)
             p = pd.read_csv(pred, encoding="utf-8-sig")
             if "3連単上位5点の的中確率" in p:
                 c = c.merge(p[["race_id", "3連単上位5点の的中確率"]], on="race_id", how="left")
-        checks.append(c.assign(日付=d))
+        checks.append(c if "日付" in c else c.assign(日付=d))  # backtest は1年分のファイルに日付が入っている
         kp = os.path.join(out, f[:8] + "_kaime.csv")
         if os.path.exists(kp):
-            kaimes.append(pd.read_csv(kp, encoding="utf-8-sig").assign(日付=d))
+            kk = pd.read_csv(kp, encoding="utf-8-sig")
+            kaimes.append(kk if "日付" in kk else kk.assign(日付=d))
     c = pd.concat(checks, ignore_index=True) if checks else pd.DataFrame()
     k = pd.concat(kaimes, ignore_index=True) if kaimes else pd.DataFrame()
     lp = os.path.join(out, "log.csv")
@@ -46,6 +50,17 @@ def load(out):
         if col in c:
             c[col] = c[col].astype(str).str.lower().eq("true")
     return c, k, lg
+
+
+SAVED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backtest", "seiseki.json")
+
+
+def saved():
+    """リポジトリに入れてある過去10年の検証の集計 (analysis/backtest/seiseki.json)。"""
+    if not os.path.exists(SAVED):
+        return None
+    with open(SAVED, encoding="utf-8") as f:
+        return json.load(f)
 
 
 def pct(x):
@@ -156,21 +171,24 @@ def summarize(c, k, lg):
     return rows
 
 
-def days_table(c, k):
-    """日ごとの成績と、その日の備考。"""
+def by_table(c, k, key):
+    """key (日付・月・年) ごとの成績と備考。"""
     out = []
-    for d, g in c.groupby("日付"):
+    if key != "日付":
+        c = c.assign(**{key: c["日付"].str[:7 if key == "月" else 4]})
+        k = k.assign(**{key: k["日付"].str[:7 if key == "月" else 4]}) if len(k) else k
+    for d, g in c.groupby(key):
         n = len(g)
         h5 = g["上位5点的中"]
-        r = {"日付": d, "レース": n, "本命1着率": g["本命1着"].mean(), "予想の本命1着確率": g["本命1着確率"].mean(),
+        r = {key: d, "レース": n, "本命1着率": g["本命1着"].mean(), "予想の本命1着確率": g["本命1着確率"].mean(),
              "予想着順的中率": g["予想着順的中"].mean(), "3連単上位5点的中率": h5.mean(),
              "3連単上位5点回収率": g.loc[h5, "三連単配当"].fillna(0).sum() / (500 * n)}
         if "単勝点数" in g and g["単勝点数"].fillna(0).sum():
             kk = g["単勝点数"].fillna(0).sum()
             r |= {"単勝点数": int(kk), "単勝的中": int(g["単勝的中"].fillna(0).sum()),
                   "単勝回収率": g["単勝払戻"].fillna(0).sum() / (100 * kk)}
-        kd = k[k["日付"] == d] if len(k) else k
-        if len(kd):  # 買い方の中でその日一番良かったもの
+        kd = k[k[key] == d] if len(k) else k
+        if len(kd):  # 買い方の中で一番良かったもの
             import kaime
             best = None
             for b, name, _ in kaime.PATTERNS:
@@ -186,7 +204,7 @@ def days_table(c, k):
         if diff >= NEAR:
             notes.append("本命がよく勝った")
         elif diff <= -NEAR * 2:
-            notes.append("本命が予想より負けた (荒れた日)")
+            notes.append("本命が予想より負けた (荒れた)")
         if r["3連単上位5点回収率"] >= 1:
             notes.append("3連単上位5点が黒字")
         if r.get("単勝回収率", 0) >= 1:
@@ -199,7 +217,7 @@ def days_table(c, k):
             "×" if diff <= -NEAR * 2 else "○" if diff > -NEAR else "△"
         r["備考"] = "、".join(notes) or "ふつう"
         out.append(r)
-    return sorted(out, key=lambda r: r["日付"], reverse=True)
+    return sorted(out, key=lambda r: r[key], reverse=True)
 
 
 def build(out):
@@ -221,10 +239,10 @@ def build(out):
                 continue
         periods[name] = {"from": cc["日付"].min(), "to": cc["日付"].max(), "days": int(cc["日付"].nunique()),
                          "rows": summarize(cc, kk, ll)}
-    # 直近7日が全期間と比べて良くなったか
+    # 直近が全期間と比べて良くなったか
     allr = {(r["区分"], r["項目"]): r for r in periods["全期間"]["rows"]}
-    if "直近7日" in periods:
-        for r in periods["直近7日"]["rows"]:
+    for name in [n for n in periods if n != "全期間"]:
+        for r in periods[name]["rows"]:
             a = allr.get((r["区分"], r["項目"]))
             if not a or "回収率" not in r or r["回収率"] != r["回収率"] or a.get("回収率") != a.get("回収率"):
                 continue
@@ -233,7 +251,13 @@ def build(out):
                 r["備考"] += f"。全期間 ({a['回収率']:.1%}) より良くなっている"
             elif d <= -TREND:
                 r["備考"] += f"。全期間 ({a['回収率']:.1%}) より悪くなっている"
-    return {"periods": periods, "days": days_table(c, k)}
+    recent = sorted(c["日付"].unique())[-RECENT_DAYS:]
+    out = {"periods": periods, "days": by_table(c[c["日付"].isin(recent)], k[k["日付"].isin(recent)] if len(k) else k, "日付")}
+    if c["日付"].str[:7].nunique() > 1:
+        out["months"] = by_table(c, k, "月")
+    if c["日付"].str[:4].nunique() > 1:
+        out["years"] = by_table(c, k, "年")
+    return out
 
 
 def show(s, out):
@@ -251,15 +275,22 @@ def show(s, out):
             else:
                 lines.append(f"  {r['評価']} {r['項目']}: {r['的中']}/{r['レース']}レース  的中率 {pct(r['的中率'])}")
             lines.append(f"      備考: {r['備考']}")
-    lines.append("\n■ 日ごと (新しい順)")
-    for r in s["days"]:
-        lines.append(f"  {r['評価']} {r['日付']} {r['レース']}R  本命1着 {pct(r['本命1着率'])} (予想 {pct(r['予想の本命1着確率'])})  "
-                     f"3連単5点 的中 {pct(r['3連単上位5点的中率'])} 回収 {pct(r['3連単上位5点回収率'])}"
-                     + (f"  単勝 回収 {pct(r['単勝回収率'])}" if "単勝回収率" in r else "") + f"  備考: {r['備考']}")
+    for key, name in [("years", "年"), ("months", "月"), ("days", "日付")]:
+        if key not in s or (key == "months" and "years" in s):  # 何年もあるときは月ごとは CSV だけ
+            continue
+        lines.append(f"\n■ {name}ごと (新しい順)" if key != "days" else f"\n■ 日ごと (直近{RECENT_DAYS}日、新しい順)")
+        for r in s[key]:
+            lines.append(f"  {r['評価']} {r[name]} {r['レース']}R  本命1着 {pct(r['本命1着率'])} (予想 {pct(r['予想の本命1着確率'])})  "
+                         f"3連単5点 的中 {pct(r['3連単上位5点的中率'])} 回収 {pct(r['3連単上位5点回収率'])}"
+                         + (f"  単勝 回収 {pct(r['単勝回収率'])}" if "単勝回収率" in r else "") + f"  備考: {r['備考']}")
     print("\n".join(lines))
     t = pd.DataFrame([{"期間": name, "から": p["from"], "まで": p["to"], **r} for name, p in s["periods"].items()
                       for r in p["rows"]])
     t.to_csv(os.path.join(out, "seiseki.csv"), index=False, encoding="utf-8-sig")
-    pd.DataFrame(s["days"]).to_csv(os.path.join(out, "seiseki_days.csv"), index=False, encoding="utf-8-sig")
-    print("\n保存しました:", os.path.join(out, "seiseki.csv"), "/", os.path.join(out, "seiseki_days.csv"))
+    saved = [os.path.join(out, "seiseki.csv")]
+    for key in ("days", "months", "years"):
+        if key in s:
+            saved.append(os.path.join(out, f"seiseki_{key}.csv"))
+            pd.DataFrame(s[key]).to_csv(saved[-1], index=False, encoding="utf-8-sig")
+    print("\n保存しました:", " / ".join(saved))
     return lines
