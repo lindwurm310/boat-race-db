@@ -40,3 +40,21 @@ jobs:
           print(t.isna().mean())
           print((t.ex_course != t.lane).mean(), t.ex_st.describe())
           PY
+      - name: オリジナル展示 (1周・回り足・直線) がページにあるか
+        run: |
+          python - <<'PY'
+          import re, sys
+          sys.path.insert(0, "analysis")
+          import live
+          for jcd in range(1, 25):
+              try:
+                  h = live.get("beforeinfo", jcd, 1, "2026-10-28")
+              except Exception as e:
+                  continue
+              keys = [k for k in ["一周", "1周", "周回", "まわり足", "回り足", "直線", "オリジナル"] if k in h]
+              print(jcd, len(h), keys)
+              if keys and "done" not in globals():
+                  done = 1
+                  open("orig.html", "w").write(h)
+          PY
+          if [ -f orig.html ]; then grep -n -B3 -A12 -E "一周|周回|まわり足|直線|オリジナル" orig.html | head -150; fi
