@@ -35,6 +35,8 @@
   td.l { text-align: left; }
   .ok { color: var(--green); font-weight: bold; }
   .ng { color: #999; }
+  td.memo { white-space: normal; text-align: left; min-width: 260px; }
+  .g { font-weight: bold; } .g-good { color: var(--green); } .g-bad { color: var(--red); }
   .tag { display: inline-block; padding: 0 6px; border-radius: 3px; background: var(--red); color: #fff; font-weight: bold; }
   pre { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 10px; white-space: pre-wrap; font: 13px/1.5 "MS Gothic", "Osaka-Mono", monospace; margin: 0 0 12px; }
   #job { display: none; margin: 12px 20px 0; max-width: 1400px; }
@@ -101,6 +103,7 @@ async function staticApi(path) {
     case "/api/check": return get(`check/${date}.json`, `${date} の答え合わせ`);
     case "/api/totals": return get("totals.json", "答え合わせの記録");
     case "/api/reviews": return get("reviews.json", "振り返り");
+    case "/api/seiseki": return get("seiseki.json", "これまでの成績");
     case "/api/racers": {
       racersCache = racersCache || (await get("racers.json", "選手の成績")).rows;
       const q = (u.searchParams.get("q") || "").replace(/[ \u3000]/g, "");
@@ -331,6 +334,47 @@ const PAGES = {
     el.append(h("div", {className: "bar"}, d,
       h("button", {className: "btn", textContent: "答え合わせ", dataset: {run: 1}, onclick: () => run("check", d.value)})), out, tot);
     load();
+  }},
+
+  seiseki: {title: "成績", async render(el) {
+    const out = h("div");
+    el.append(out);
+    let s;
+    try { s = await api("/api/seiseki"); } catch (e) {
+      out.append(h("p", {}, e.message, hint("。予想して答え合わせをすると、ここにたまっていきます。")));
+      return;
+    }
+    const names = Object.keys(s.periods);
+    const sel = h("select", {}, names.map(n => h("option", {value: n, textContent: `${n} (${s.periods[n].from}〜${s.periods[n].to}、${s.periods[n].days}日)`})));
+    sel.value = names.includes(state.seisekiPeriod) ? state.seisekiPeriod : names[0];
+    const grade = g => h("span", {className: "g " + (g === "◎" ? "g-good" : g === "×" ? "g-bad" : ""), textContent: g});
+    const money = v => v == null ? "" : Math.round(v).toLocaleString() + "円";
+    const box = h("div");
+    const draw = () => {
+      state.seisekiPeriod = sel.value;
+      const rows = s.periods[sel.value].rows;
+      const hit = rows.filter(r => r["区分"] === "当たり方"), bet = rows.filter(r => r["区分"] !== "当たり方");
+      box.replaceChildren(
+        h("h3", {textContent: "当たり方"}),
+        table([["評価", r => grade(r["評価"])], ["項目", "項目", "l"], ["レース", "レース"], ["的中", "的中"],
+          ["的中率", r => pct(r["的中率"])], ["備考", "備考", "memo"]], hit),
+        h("h3", {textContent: "買っていたらの収支 (1点100円)"}),
+        table([["評価", r => grade(r["評価"])], ["券種", "区分"], ["買い方", "項目", "l"], ["点数", "点数"], ["的中", "的中"],
+          ["的中率", r => pct0(r["的中率"])], ["投資", r => money(r["投資"])], ["払戻", r => money(r["払戻"])],
+          ["収支", r => r["収支"] == null ? "" : h("span", {className: r["収支"] > 0 ? "ok" : "err", textContent: yen(r["収支"])})],
+          ["回収率", r => pct(r["回収率"])], ["備考", "備考", "memo"]], bet, r => r["評価"] === "◎" ? "buy" : ""));
+    };
+    sel.onchange = draw;
+    draw();
+    out.append(h("div", {className: "bar"}, sel),
+      h("p", {className: "note", textContent: "これまでの答え合わせを全部まとめた成績です。評価: ◎ 良い / ○ まずまず / △ 今ひとつ / × 悪い。回収率は 100%以上で黒字、ボートレースの払戻率は約75%なので、75%未満はでたらめに買うより悪い買い方です。的中率は予想した確率と比べています。"}),
+      box,
+      h("h3", {textContent: "日ごと"}),
+      table([["評価", r => grade(r["評価"])], ["日付", "日付"], ["レース", "レース"], ["本命1着率", r => pct0(r["本命1着率"])],
+        ["予想の本命1着確率", r => pct0(r["予想の本命1着確率"])], ["予想着順 的中", r => pct(r["予想着順的中率"])],
+        ["3連単5点 的中", r => pct0(r["3連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["3連単上位5点回収率"])],
+        ["単勝 点数", "単勝点数"], ["単勝 回収", r => pct(r["単勝回収率"])],
+        ["一番良かった買い方", "一番良かった買い方", "l"], ["その回収率", r => pct(r["その回収率"])], ["備考", "備考", "memo"]], s.days));
   }},
 
   review: {title: "先週の振り返り", async render(el) {

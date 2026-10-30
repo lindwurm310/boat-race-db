@@ -10,6 +10,7 @@
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
+  python analysis/yosou.py seiseki              これまでの予想の成績 (的中率・回収率) を全期間・直近30日・直近7日・日ごとに集計し、良い悪いを備考に書く
   python analysis/yosou.py serve                 Chrome の操作画面 (http://127.0.0.1:8765/) と拡張機能用のサーバー。全部の機能を Chrome から使える
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
@@ -38,6 +39,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 import build_db  # noqa: E402
 import fetch  # noqa: E402
+import seiseki  # noqa: E402
 from predict import (V4_FEATS, V4_LATE, PERMS2, PERMS3, Predictor, expected_value, features, fit_odds, load,  # noqa: E402
                      win_payouts)
 import lightgbm as lgb  # noqa: E402
@@ -716,6 +718,13 @@ def report(c, days, a):
         for _, r in strong.sort_values("本命1着確率", ascending=False).head(10).iterrows():
             L.append(f"    {r['日付']} {r['場']} {r['R']}R 本命{r['本命']} ({r['本命1着確率']:.0%}) → {r['結果']} "
                      f"{r['決まり手']} ST{r['本命のST順位']:.0f}番手 風{r['風速']}m")
+    s = seiseki.build(OUT)  # 答え合わせの全期間の成績と備考
+    if s:
+        p = s["periods"]["全期間"]
+        L.append(f"\n■ これまでの成績 ({p['from']}〜{p['to']}、{p['days']}日) と備考")
+        for r in p["rows"]:
+            v = f"回収率 {seiseki.pct(r['回収率'])}" if r.get("投資") else f"的中率 {seiseki.pct(r['的中率'])}"
+            L.append(f"  {r['評価']} {r['区分']} {r['項目']}: {v}  … {r['備考']}")
     L.append("\n■ フィードバック")
     L.append("  先週の結果を DB に取り込み済み。学習し直すと、モーターの入れ替え・選手の調子・場の傾向が次の予想に入る。")
     return L
@@ -731,6 +740,11 @@ def live_summary(days):
         return None
     k = lg["live買い_点数"].fillna(0).sum()
     return f"  live・拡張機能の買い目 (実オッズ): {int(k)}点  回収率 {lg['live買い_払戻'].fillna(0).sum() / (100 * k):.1%}"
+
+
+# ---------------- seiseki: これまでの予想の成績と備考 ----------------
+def cmd_seiseki(a):
+    seiseki.show(seiseki.build(OUT), OUT)
 
 
 # ---------------- daily: 結果の取り込み → 答え合わせ → 再学習 ----------------
@@ -776,7 +790,7 @@ def cmd_racer(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review"])
+    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review", "seiseki"])
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
@@ -796,7 +810,8 @@ def main():
     if a.date in ("today", "yesterday", "tomorrow"):
         a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
-     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review}[a.command](a)
+     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review,
+     "seiseki": cmd_seiseki}[a.command](a)
 
 
 if __name__ == "__main__":
