@@ -63,6 +63,9 @@ jobs:
           if [ -f model/win.txt ]; then R=100000; else R=0; fi
           python analysis/yosou.py daily --retrain-days $R
 
+      - name: 昨日の直前情報 (スタート展示の進入・ST など) をためる
+        run: python analysis/beforeinfo.py --date yesterday || echo "直前情報を取れませんでした"
+
       - name: 今日から1週間 (番組表が出ている日) の予想
         run: python analysis/yosou.py week || true
 
@@ -70,6 +73,7 @@ jobs:
         run: |
           python analysis/site.py --out site
           find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
+          mkdir -p site/history/beforeinfo && cp -r predictions/beforeinfo/. site/history/beforeinfo/ || true
           touch site/.nojekyll
 
       - name: gh-pages に置く
