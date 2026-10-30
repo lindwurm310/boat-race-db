@@ -24,37 +24,8 @@ jobs:
           key: db-none
           restore-keys: db-
       - run: if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
-      - name: 3日分を少しずつ
+      - name: 同時に待つ版で1日まるごと + さかのぼり
         run: |
-          for d in 2026-10-28 2025-10-01 2024-10-01 2023-01-10; do
-            python analysis/beforeinfo.py --date $d --limit 4 || echo "失敗 $d"
-            head -13 predictions/beforeinfo/${d//-/}.csv || true
-          done
-      - name: 1日まるごと (所要時間)
-        run: |
-          time python analysis/beforeinfo.py --date 2026-10-27
-          wc -l predictions/beforeinfo/20261027.csv
-          python - <<'PY'
-          import pandas as pd
-          t = pd.read_csv("predictions/beforeinfo/20261027.csv")
-          print(t.isna().mean())
-          print((t.ex_course != t.lane).mean(), t.ex_st.describe())
-          PY
-      - name: オリジナル展示 (1周・回り足・直線) がページにあるか
-        run: |
-          python - <<'PY'
-          import re, sys
-          sys.path.insert(0, "analysis")
-          import live
-          for jcd in range(1, 25):
-              try:
-                  h = live.get("beforeinfo", jcd, 1, "2026-10-28")
-              except Exception as e:
-                  continue
-              keys = [k for k in ["一周", "1周", "周回", "まわり足", "回り足", "直線", "オリジナル"] if k in h]
-              print(jcd, len(h), keys)
-              if keys and "done" not in globals():
-                  done = 1
-                  open("orig.html", "w").write(h)
-          PY
-          if [ -f orig.html ]; then grep -n -B3 -A12 -E "一周|周回|まわり足|直線|オリジナル" orig.html | head -150; fi
+          time python analysis/beforeinfo.py --date 2026-10-26
+          time python analysis/beforeinfo.py --backfill-minutes 5 --until 2026-10-01
+          ls -la predictions/beforeinfo
