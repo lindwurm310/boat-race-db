@@ -1,0 +1,63 @@
+name: beforeinfo-backfill
+# 過去の直前情報 (スタート展示の進入コース・ST など) を毎晩少しずつさかのぼって集め、gh-pages の history/beforeinfo に置く。
+# 1回 150 分で約50日分。2024-10-01 まで (約2年) さかのぼったら何もしない。
+on:
+  schedule:
+    - cron: "0 17 * * *"   # UTC 17:00 = 日本時間 2:00 (レースの無い時間)
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 集める時間 (分)
+        default: "150"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: yosou-page
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  PYTHONUTF8: "1"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: checkout gh-pages
+        run: |
+          git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          mkdir -p predictions/beforeinfo site/history/beforeinfo
+          cp -r site/history/beforeinfo/. predictions/beforeinfo/ || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: restore DB (毎朝の実行が置いたもの)
+        uses: actions/cache/restore@v4
+        with:
+          path: boatrace.sqlite
+          key: db-none
+          restore-keys: db-
+      - run: if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
+
+      - name: さかのぼって集める
+        run: python analysis/beforeinfo.py --backfill-minutes ${{ inputs.minutes || '150' }} --until 2024-10-01
+
+      - name: gh-pages に置く
+        if: always()
+        run: |
+          cp -r predictions/beforeinfo/. site/history/beforeinfo/
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "直前情報 $(ls history/beforeinfo | head -1 | cut -c1-8) から" || echo "変更なし"
+          git pull -q --rebase origin gh-pages && git push origin gh-pages
