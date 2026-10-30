@@ -223,6 +223,13 @@ class App:
             return 404, {"error": "答え合わせの記録がまだありません"}
         return 200, s
 
+    def advice(self):
+        p = os.path.join(HERE, "advice.md")  # 「今週のまとめ」に載せるアドバイス (手で書く)
+        if not os.path.exists(p):
+            return 404, {"error": "アドバイスはまだありません"}
+        with open(p, encoding="utf-8-sig") as f:
+            return 200, {"text": f.read()}
+
     def reviews(self):
         out = self.y.OUT
         files = sorted([f for f in os.listdir(out) if f.startswith("review_") and f.endswith(".txt")],
@@ -284,6 +291,7 @@ def make_handler(app):
                     "/api/check": lambda: app.check(date),
                     "/api/totals": app.totals,
                     "/api/reviews": app.reviews,
+                    "/api/advice": app.advice,
                     "/api/seiseki": lambda: app.seiseki((q.get("src") or [""])[0]),
                     "/api/racers": lambda: app.racers((q.get("q") or [""])[0]),
                 }
