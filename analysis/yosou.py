@@ -10,6 +10,8 @@
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
+  python analysis/yosou.py seiseki              これまでの予想の成績 (的中率・回収率) を全期間・直近30日・直近7日・日ごとに集計し、良い悪いを備考に書く
+  python analysis/yosou.py backtest --years 10   過去10年を1年ずつ、その前のデータだけで学習して予想し直し、成績と備考を出す
   python analysis/yosou.py serve                 Chrome の操作画面 (http://127.0.0.1:8765/) と拡張機能用のサーバー。全部の機能を Chrome から使える
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
@@ -38,6 +40,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 import build_db  # noqa: E402
 import fetch  # noqa: E402
+import seiseki  # noqa: E402
 from predict import (V4_FEATS, V4_LATE, PERMS2, PERMS3, Predictor, expected_value, features, fit_odds, load,  # noqa: E402
                      win_payouts)
 import lightgbm as lgb  # noqa: E402
@@ -185,30 +188,13 @@ def day_path(date, suffix):
     return os.path.join(OUT, date.replace("-", "") + suffix)
 
 
-def cmd_predict(a):
-    pr = Predictor.load(a.model)
-    prog = program(a.date, a.raw)
-    if prog is None or prog.empty:
-        sys.exit(f"{a.date} の番組表がまだ公開されていません (公式サイトで公開されるのは前日〜当日朝)")
-    start = (dt.date.fromisoformat(a.date) - dt.timedelta(days=HISTORY_DAYS)).isoformat()
-    hist, _ = load(a.db, start, (dt.date.fromisoformat(a.date) - dt.timedelta(days=1)).isoformat())
-    names = prog.set_index(["race_id", "lane"])["racer_name"]
-    new = prog.reindex(columns=hist.columns)
-    df = features(pd.concat([hist, new], ignore_index=True), require_result=False)
-    df = df[df.race_date == a.date]
-    os.makedirs(OUT, exist_ok=True)
-    df.to_pickle(day_path(a.date, "_feat.pkl"))  # live で使う (直前情報だけ差し替える)
+def pred_table(pr, df, info, names, venue, om):
+    """特徴量 df のレースの予想の表 (predictions/YYYYMMDD.csv の列)。info は race_id ごとの jcd・rno・deadline、
+    names は (race_id, 艇番) → 選手名、om はオッズのモデル (None なら単勝の買い目なし)。"""
     P, Q = pr.probs(df)
     ex, tri = pr.orders(P, Q)
-    con = sqlite3.connect(a.db)
-    venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
-    con.close()
-    info = prog.drop_duplicates("race_id").set_index("race_id")
-    odds_path = os.path.join(a.model, "odds.txt")
     EV = None
-    if os.path.exists(odds_path):
-        om = lgb.Booster(model_file=odds_path)
-        om.best_iteration = 0
+    if om is not None:
         odds, EV = expected_value(df, P, om, V4_FEATS)
     rows = []
     for n, rid in enumerate(P.index):
@@ -227,7 +213,32 @@ def cmd_predict(a):
                      **{f"{l}号艇": round(float(p[l - 1]), 3) for l in range(1, 7)},
                      "判断": advice(float(p.max())),
                      **(ev_columns(EV.values[n], odds.values[n]) if EV is not None else {})})
-    out = pd.DataFrame(rows).sort_values(["締切", "場"])
+    return pd.DataFrame(rows).sort_values(["締切", "場"])
+
+
+def cmd_predict(a):
+    pr = Predictor.load(a.model)
+    prog = program(a.date, a.raw)
+    if prog is None or prog.empty:
+        sys.exit(f"{a.date} の番組表がまだ公開されていません (公式サイトで公開されるのは前日〜当日朝)")
+    start = (dt.date.fromisoformat(a.date) - dt.timedelta(days=HISTORY_DAYS)).isoformat()
+    hist, _ = load(a.db, start, (dt.date.fromisoformat(a.date) - dt.timedelta(days=1)).isoformat())
+    names = prog.set_index(["race_id", "lane"])["racer_name"]
+    new = prog.reindex(columns=hist.columns)
+    df = features(pd.concat([hist, new], ignore_index=True), require_result=False)
+    df = df[df.race_date == a.date]
+    os.makedirs(OUT, exist_ok=True)
+    df.to_pickle(day_path(a.date, "_feat.pkl"))  # live で使う (直前情報だけ差し替える)
+    con = sqlite3.connect(a.db)
+    venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
+    con.close()
+    info = prog.drop_duplicates("race_id").set_index("race_id")
+    odds_path = os.path.join(a.model, "odds.txt")
+    om = None
+    if os.path.exists(odds_path):
+        om = lgb.Booster(model_file=odds_path)
+        om.best_iteration = 0
+    out = pred_table(pr, df, info, names, venue, om)
     os.makedirs(OUT, exist_ok=True)
     path = os.path.join(OUT, a.date.replace("-", "") + ".csv")
     out.to_csv(path, index=False, encoding="utf-8-sig")  # Excel で文字化けしないように BOM 付き
@@ -293,27 +304,23 @@ def ev_check(r, rid, tan):
     return {"単勝点数": len(lanes), "単勝的中": int(got > 0), "単勝払戻": got}
 
 
-def cmd_check(a):
-    path = os.path.join(OUT, a.date.replace("-", "") + ".csv")
-    if not os.path.exists(path):
-        sys.exit(f"予想ファイルがありません: {path} (先に predict を実行)")
-    pred = pd.read_csv(path, encoding="utf-8-sig", dtype={"単勝買い目": str}).set_index("race_id")
-    races, rp = results_of(a.date, a.raw)
-    if races is None:
-        print(f"{a.date} の成績ファイルはまだ公開されていないので、boatrace.jp の結果ページから取ります (1レース1秒)")
-        races, rp = results_web(a.date, list(pred.index))
-    if races is None:
-        sys.exit(f"{a.date} の結果がまだありません")
-    res, pay = rp
+def win_table(pay, res):
+    """(race_id, 艇番) → 単勝の払戻。欠場・フライング・出遅れの艇の単勝は返還 (100 円)。"""
+    tan = win_payouts(pay).set_index(["race_id", "lane"])["payout"]
+    for rid_, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
+        tan[(rid_, int(lane))] = 100
+    return tan
+
+
+def compare(pred, races, res, pay):
+    """予想 (race_id が index) と結果 (races: 決まり手・風・波、res: 艇ごとの着・ST、pay: 払戻) の答え合わせ (_check.csv の行)。"""
     fin = res.pivot(index="race_id", columns="lane", values="finish")
     st = res.assign(st=res["start_timing"].map(lambda s: -float(s[1:]) if isinstance(s, str) and s[:1] == "F"
                                                 else pd.to_numeric(s, errors="coerce")))
     st = st.pivot(index="race_id", columns="lane", values="st")
-    pay3 = pay[pay.bet_type == "３連単"].set_index("race_id")["payout"]
-    tan = win_payouts(pay).set_index(["race_id", "lane"])["payout"]
-    # 欠場・フライング・出遅れの艇の単勝は返還 (100 円)
-    for rid_, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
-        tan[(rid_, int(lane))] = 100
+    p3 = pay[pay.bet_type == "３連単"]
+    pay3 = dict(zip(zip(p3.race_id, p3.combination), p3.payout))  # 同着だと1レースに2つ以上あるので組で引く
+    tan = win_table(pay, res)
     rows = []
     for rid, r in pred.iterrows():
         if rid not in fin.index:
@@ -330,9 +337,25 @@ def cmd_check(a):
                          風速=races.at[rid, "wind_speed"], 波=races.at[rid, "wave_cm"],
                          本命1着=order[0] == fav, 本命3着以内=f.get(fav) in (1, 2, 3),
                          予想着順的中=r["予想着順"] == actual, 上位5点的中=actual in tickets,
-                         三連単配当=pay3.get(rid),
+                         三連単配当=pay3.get((rid, actual)),
+                         **({"3連単上位5点の的中確率": r["3連単上位5点の的中確率"]} if "3連単上位5点の的中確率" in r else {}),
                          **ev_check(r, rid, tan)))
-    c = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
+
+
+def cmd_check(a):
+    path = os.path.join(OUT, a.date.replace("-", "") + ".csv")
+    if not os.path.exists(path):
+        sys.exit(f"予想ファイルがありません: {path} (先に predict を実行)")
+    pred = pd.read_csv(path, encoding="utf-8-sig", dtype={"単勝買い目": str}).set_index("race_id")
+    races, rp = results_of(a.date, a.raw)
+    if races is None:
+        print(f"{a.date} の成績ファイルはまだ公開されていないので、boatrace.jp の結果ページから取ります (1レース1秒)")
+        races, rp = results_web(a.date, list(pred.index))
+    if races is None:
+        sys.exit(f"{a.date} の結果がまだありません")
+    res, pay = rp
+    c = compare(pred, races, res, pay)
     out = os.path.join(OUT, a.date.replace("-", "") + "_check.csv")
     c.to_csv(out, index=False, encoding="utf-8-sig")
     n = len(c)
@@ -360,8 +383,8 @@ def cmd_check(a):
             print(f"  堅いと見たのに負けたレース ({len(strong)}):")
             print(strong[["場", "R", "本命", "本命1着確率", "結果", "決まり手", "本命のST順位", "風速", "波"]]
                   .to_string(index=False))
-    summary |= check_kaime(a.date, pred[pred.index.isin(fin.index)], pay, res)
-    summary |= check_live(a.date, tan)
+    summary |= check_kaime(a.date, pred[pred.index.isin(c["race_id"])], pay, res)
+    summary |= check_live(a.date, win_table(pay, res))
     log = os.path.join(OUT, "log.csv")
     old = pd.read_csv(log, encoding="utf-8-sig") if os.path.exists(log) else pd.DataFrame()
     if len(old) and "date" in old:
@@ -371,14 +394,19 @@ def cmd_check(a):
     print_totals(log)
 
 
+def kaime_rows(pred, pay, res):
+    import kaime
+    void = {}  # 欠場・フライング・出遅れの艇 (その艇を含む買い目は返還)
+    for rid, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
+        void.setdefault(rid, set()).add(int(lane))
+    return kaime.race_rows(pred, kaime.payout_table(pay), void)
+
+
 def check_kaime(date, pred, pay, res):
     """3連単・3連複を買い方ごと (◎○▲△□ のフォーメーション・流し・BOX) に買っていたらの収支 (analysis/kaime.py)。
     レースごとは predictions/YYYYMMDD_kaime.csv。"""
     import kaime
-    void = {}
-    for rid, lane in res.loc[res["finish_raw"].fillna("").str[0].isin(["K", "F", "L"]), ["race_id", "lane"]].values:
-        void.setdefault(rid, set()).add(int(lane))
-    k = kaime.race_rows(pred, kaime.payout_table(pay), void)
+    k = kaime_rows(pred, pay, res)
     if k.empty:
         return {}
     k.to_csv(day_path(date, "_kaime.csv"), index=False, encoding="utf-8-sig")
@@ -716,6 +744,13 @@ def report(c, days, a):
         for _, r in strong.sort_values("本命1着確率", ascending=False).head(10).iterrows():
             L.append(f"    {r['日付']} {r['場']} {r['R']}R 本命{r['本命']} ({r['本命1着確率']:.0%}) → {r['結果']} "
                      f"{r['決まり手']} ST{r['本命のST順位']:.0f}番手 風{r['風速']}m")
+    s = seiseki.build(OUT)  # 答え合わせの全期間の成績と備考
+    if s:
+        p = s["periods"]["全期間"]
+        L.append(f"\n■ これまでの成績 ({p['from']}〜{p['to']}、{p['days']}日) と備考")
+        for r in p["rows"]:
+            v = f"回収率 {seiseki.pct(r['回収率'])}" if r.get("投資") else f"的中率 {seiseki.pct(r['的中率'])}"
+            L.append(f"  {r['評価']} {r['区分']} {r['項目']}: {v}  … {r['備考']}")
     L.append("\n■ フィードバック")
     L.append("  先週の結果を DB に取り込み済み。学習し直すと、モーターの入れ替え・選手の調子・場の傾向が次の予想に入る。")
     return L
@@ -731,6 +766,68 @@ def live_summary(days):
         return None
     k = lg["live買い_点数"].fillna(0).sum()
     return f"  live・拡張機能の買い目 (実オッズ): {int(k)}点  回収率 {lg['live買い_払戻'].fillna(0).sum() / (100 * k):.1%}"
+
+
+# ---------------- seiseki: これまでの予想の成績と備考 / backtest: 過去を予想し直して成績を出す ----------------
+BACKTEST = os.path.join(OUT, "backtest")
+
+
+def cmd_seiseki(a):
+    seiseki.show(seiseki.build(BACKTEST if a.backtest else OUT), BACKTEST if a.backtest else OUT)
+
+
+def cmd_backtest(a):
+    """過去 --years 年を1年ずつ、その年より前の --days 日だけで学習したモデルで予想し直して答え合わせする。
+    未来のデータは学習に使わないので、毎日の予想と同じ条件の成績になる (直前情報・実オッズは使わない前日の予想)。
+    結果は predictions/backtest/YYYYMMDD_check.csv・_kaime.csv (YYYYMMDD はその1年の初日)。済んだ年は飛ばす。
+    最後に seiseki と同じ成績と備考を出す (1年あたり学習に 40分〜1時間半)。"""
+    end = dt.date.fromisoformat(last_date(a.db))
+    os.makedirs(BACKTEST, exist_ok=True)
+    con = sqlite3.connect(a.db)
+    venue = dict(con.execute("SELECT jcd, name FROM venues").fetchall())
+    con.close()
+    for i in range(a.years, 0, -1):
+        t0, t1 = end - dt.timedelta(days=365 * i - 1), end - dt.timedelta(days=365 * (i - 1))
+        path = os.path.join(BACKTEST, f"{t0:%Y%m%d}_check.csv")
+        if os.path.exists(path):
+            print(f"{t0}〜{t1}: 済み ({path})")
+            continue
+        warm, val = t0 - dt.timedelta(days=a.days), t0 - dt.timedelta(days=30)
+        start = warm - dt.timedelta(days=HISTORY_DAYS)
+        print(f"\n===== {t0}〜{t1} を予想 (学習 {warm}〜{t0 - dt.timedelta(days=1)})", flush=True)
+        raw, pay = load(a.db, start.isoformat(), t1.isoformat())
+        df = features(raw).merge(win_payouts(pay), on=["race_id", "lane"], how="left")
+        d = df.race_date
+        tr, va = df[(d >= warm.isoformat()) & (d < val.isoformat())], df[(d >= val.isoformat()) & (d < t0.isoformat())]
+        te = df[d >= t0.isoformat()]
+        print(f"学習 {tr.race_id.nunique()}レース / 検証 {va.race_id.nunique()}レース / 予想 {te.race_id.nunique()}レース",
+              flush=True)
+        pr = Predictor(V4_FEATS, "v3").fit(tr, va)
+        om = fit_odds(tr, va, V4_FEATS)
+        con = sqlite3.connect(a.db)
+        info = pd.read_sql_query("SELECT race_id, jcd, rno, deadline, technique, wind_speed, wave_cm FROM races "
+                                 "WHERE race_date >= ? AND race_date <= ?", con,
+                                 params=(t0.isoformat(), t1.isoformat())).set_index("race_id")
+        names = pd.read_sql_query("SELECT race_id, lane, racer_name FROM entries WHERE race_id >= ? AND race_id < ?", con,
+                                  params=(f"{t0:%Y%m%d}", f"{t1:%Y%m%d}~")).set_index(["race_id", "lane"])["racer_name"]
+        con.close()
+        pred = pred_table(pr, te, info, names, venue, om).set_index("race_id")
+        res = raw[raw.race_id.isin(pred.index)]
+        p = pay[pay.race_id.isin(pred.index)]
+        c = compare(pred, info, res, p)
+        k = kaime_rows(pred, p, res)
+        day = lambda t: t.assign(日付=t["race_id"].str[:8].map(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:]}"))
+        pred.reset_index().to_csv(os.path.join(BACKTEST, f"{t0:%Y%m%d}.csv"), index=False, encoding="utf-8-sig")
+        day(k).to_csv(os.path.join(BACKTEST, f"{t0:%Y%m%d}_kaime.csv"), index=False, encoding="utf-8-sig")
+        day(c).to_csv(path, index=False, encoding="utf-8-sig")  # これがあれば済み
+        print(f"{len(c)}レース  本命の1着率 {c['本命1着'].mean():.1%}  保存しました: {path}", flush=True)
+    s = seiseki.build(BACKTEST)
+    seiseki.show(s, BACKTEST)
+    from server import plain
+    os.makedirs(os.path.dirname(seiseki.SAVED), exist_ok=True)
+    with open(seiseki.SAVED, "w", encoding="utf-8") as f:  # 画面用の集計 (リポジトリに入れておく)
+        json.dump(plain(s), f, ensure_ascii=False, separators=(",", ":"))
+    print("画面用の集計:", seiseki.SAVED)
 
 
 # ---------------- daily: 結果の取り込み → 答え合わせ → 再学習 ----------------
@@ -776,12 +873,13 @@ def cmd_racer(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review"])
+    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review", "seiseki",
+                                               "backtest"])
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
     ap.add_argument("--model", default=os.path.join(ROOT, "model"))
     ap.add_argument("--date", default=dt.date.today().isoformat(), help="予想・答え合わせする日 (既定: 今日)。today / yesterday / tomorrow も可")
-    ap.add_argument("--days", type=int, default=730, help="train: 直近何日分で学習するか")
+    ap.add_argument("--days", type=int, default=730, help="train・backtest: 直近何日分で学習するか")
     ap.add_argument("--no-late", action="store_true", help="train: 直前情報のモデルを作らない (学習が半分の時間になる)")
     ap.add_argument("--within", type=int, default=30, help="live: 締切まで何分以内のレースを見るか")
     ap.add_argument("--all", action="store_true", help="live: その日の全レースを見る (時間がかかる)")
@@ -791,12 +889,15 @@ def main():
     ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
     ap.add_argument("--no-open", action="store_true", help="serve: 起動したときにブラウザを開かない")
+    ap.add_argument("--years", type=int, default=10, help="backtest: 過去何年分を予想し直すか")
+    ap.add_argument("--backtest", action="store_true", help="seiseki: backtest の成績を出す")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
     a = ap.parse_args()
     if a.date in ("today", "yesterday", "tomorrow"):
         a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
-     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review}[a.command](a)
+     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review,
+     "seiseki": cmd_seiseki, "backtest": cmd_backtest}[a.command](a)
 
 
 if __name__ == "__main__":

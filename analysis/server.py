@@ -211,6 +211,18 @@ class App:
         t = pd.read_csv(lg, encoding="utf-8-sig").sort_values("date")
         return 200, {"rows": t.to_dict("records")}
 
+    def seiseki(self, src):
+        import seiseki
+        if src == "backtest":  # 過去10年を予想し直した分 (yosou.py backtest)。無ければリポジトリに入っている集計
+            s = seiseki.build(self.y.BACKTEST) or seiseki.saved()
+            if s is None:
+                return 404, {"error": "過去の検証がまだありません (yosou.py backtest を実行してください)"}
+            return 200, s
+        s = seiseki.build(self.y.OUT)
+        if s is None:
+            return 404, {"error": "答え合わせの記録がまだありません"}
+        return 200, s
+
     def reviews(self):
         out = self.y.OUT
         files = sorted([f for f in os.listdir(out) if f.startswith("review_") and f.endswith(".txt")],
@@ -272,6 +284,7 @@ def make_handler(app):
                     "/api/check": lambda: app.check(date),
                     "/api/totals": app.totals,
                     "/api/reviews": app.reviews,
+                    "/api/seiseki": lambda: app.seiseki((q.get("src") or [""])[0]),
                     "/api/racers": lambda: app.racers((q.get("q") or [""])[0]),
                 }
                 if u.path not in routes:
