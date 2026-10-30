@@ -1,0 +1,42 @@
+name: beforeinfo-test
+# 一時的な動作確認 (過去の直前情報が取れるか)。確認が済んだら消す。
+on:
+  push:
+    branches: [claude/project-thread-o4gk97]
+    paths: [analysis/beforeinfo.py, .github/workflows/beforeinfo-test.yml]
+env:
+  TZ: Asia/Tokyo
+  PYTHONUTF8: "1"
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: boatrace.sqlite
+          key: db-none
+          restore-keys: db-
+      - run: if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
+      - name: 3日分を少しずつ
+        run: |
+          for d in 2026-10-28 2025-10-01 2024-10-01 2023-01-10; do
+            python analysis/beforeinfo.py --date $d --limit 4 || echo "失敗 $d"
+            head -13 predictions/beforeinfo/${d//-/}.csv || true
+          done
+      - name: 1日まるごと (所要時間)
+        run: |
+          time python analysis/beforeinfo.py --date 2026-10-27
+          wc -l predictions/beforeinfo/20261027.csv
+          python - <<'PY'
+          import pandas as pd
+          t = pd.read_csv("predictions/beforeinfo/20261027.csv")
+          print(t.isna().mean())
+          print((t.ex_course != t.lane).mean(), t.ex_st.describe())
+          PY
