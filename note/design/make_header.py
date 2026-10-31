@@ -209,7 +209,72 @@ def style_simple(day, title, sub):
     return finish(img, W, H)
 
 
-STYLES = {"note": style_note, "shinbun": style_shinbun, "simple": style_simple}
+# ---------------------------------------------------------------- 案D 大きな文字＋水面（Noteの一覧で小さく出ても読める版）
+def fit_font(d, s, name, size, max_w):
+    """max_w(px) に収まるまでフォントを小さくする。"""
+    while size > 10:
+        f = font(name, size)
+        if d.textlength(s, font=f) <= max_w * S:
+            return f
+        size -= 2
+    return font(name, size)
+
+
+def style_race(day, title, sub):
+    """Note の一覧では幅300px前後に縮むので、主役の文字は高さ130px以上にする。
+
+    title は使わない（長いタイトルは記事タイトル側に任せ、画像は「ボートレース予想」と日付をひと目で見せる）。
+    """
+    paper, ink, red, water = "#f1ebdd", "#141414", "#c8302a", "#1d5a96"
+    img, d = canvas(W, H, paper)
+    pad = 48
+    m, dd, yb = date_parts(day)
+
+    # 1段目: 赤地に白抜きの日付 ＋ ひとこと
+    date_s = f"{m}/{dd}"
+    fd = font("ZenKakuGothicNew-Black.ttf", 96)
+    fy = font("ZenKakuGothicNew-Black.ttf", 56)
+    dw = d.textlength(date_s, font=fd) / S + 16 + d.textlength(f"({yb})", font=fy) / S
+    d.rounded_rectangle([pad * S, 34 * S, (pad + dw + 56) * S, 166 * S], radius=14 * S, fill=red)
+    text(d, (pad + 28, 102), date_s, fd, "#ffffff", anchor="lm")
+    text(d, (pad + 28 + d.textlength(date_s, font=fd) / S + 16, 112), f"({yb})", fy, "#ffffff", anchor="lm")
+    cx = pad + dw + 56 + 32
+    text(d, (cx, 72), "55万レースの", fit_font(d, "55万レースの", "ZenKakuGothicNew-Black.ttf", 52, W - pad - cx), ink, anchor="lm")
+    text(d, (cx, 132), "データで予想", fit_font(d, "データで予想", "ZenKakuGothicNew-Black.ttf", 52, W - pad - cx), ink, anchor="lm")
+
+    # 2段目: 主役「ボートレース予想」
+    head = "ボートレース予想"
+    text(d, (W / 2, 268), head, fit_font(d, head, "ZenKakuGothicNew-Black.ttf", 150, W - 2 * pad), ink, anchor="mm")
+
+    # 3段目: 小見出し（成績など）
+    if sub:
+        text(d, (W / 2, 396), sub, fit_font(d, sub, "ZenKakuGothicNew-Bold.ttf", 46, W - 2 * pad), red, anchor="mm")
+
+    # 下段: 水面と6艇（枠番の色の札が引き波を立てて走る）
+    wy = 440
+    d.rectangle([0, wy * S, W * S, H * S], fill=water)
+    rnd = random.Random(dd)
+    for k in range(9):  # 波
+        y = wy + 18 + k * 26
+        pts = [(x * S, (y + 5 * math.sin(x / 38 + k * 1.7)) * S) for x in range(0, W + 10, 10)]
+        d.line(pts, fill="#2a6aa8", width=3 * S)
+    tile, gap = 104, 86
+    x0 = (W - (6 * tile + 5 * gap)) / 2 + 40
+    pos = [(x0 + i * (tile + gap), wy + 62 + (18 if i % 2 else 0)) for i in range(6)]
+    for x, y in pos:  # 引き波（先に描いて、札の下に隠れるようにする）
+        for ln, dy, th in [(gap - 18, 22, 7), (gap - 34, 50, 6), (gap - 10, 78, 7)]:
+            ln *= rnd.uniform(0.75, 1.0)
+            d.rounded_rectangle([(x - 10 - ln) * S, (y + dy) * S, (x - 10) * S, (y + dy + th) * S],
+                                radius=3 * S, fill="#dce9f5")
+    for i, (x, y) in enumerate(pos):
+        d.rounded_rectangle([x * S, y * S, (x + tile) * S, (y + tile) * S], radius=10 * S,
+                            fill=WAKU[i], outline=ink, width=4 * S)
+        text(d, (x + tile / 2, y + tile / 2 + 4), str(i + 1), font("ZenKakuGothicNew-Black.ttf", 80),
+             WAKU_TEXT[i], anchor="mm")
+    return finish(img, W, H, grain=0.05, seed=dd)
+
+
+STYLES = {"race": style_race, "note": style_note, "shinbun": style_shinbun, "simple": style_simple}
 
 
 # ---------------------------------------------------------------- アイコン（Noteは丸く切り抜かれる）
