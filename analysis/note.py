@@ -3,7 +3,7 @@
   python analysis/note.py --date 2026-11-01      predictions/20261101.csv の予想から記事を作る
   python analysis/note.py --date tomorrow        明日の分 (today / tomorrow も可)
 
-出力は predictions/note/YYYYMMDD.md (記事の元) と YYYYMMDD.html (ブラウザで開いて「本文をコピー」→ Note の
+出力は predictions/note/YYYYMMDD.md (記事の元)、YYYYMMDD.png (見出し画像) と YYYYMMDD.html (ブラウザで開いて「本文をコピー」→ Note の
 編集画面に貼り付ける用)。Note には公式の投稿 API がないので、公開は人が Note の画面で行う:
   1. HTML を開いて「タイトルをコピー」「本文をコピー」→ Note の新規記事に貼る
   2. 「（ここから有料エリア）」の位置で「有料エリア設定」のラインを引き、価格 (既定 300円) を確かめて公開
@@ -193,7 +193,25 @@ def inline(s):
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
 
 
-def to_html(md, title):
+def header_image(date, path):
+    """見出し画像 (1280x670、競艇新聞ふう) を note/design/make_header.py で作る。Pillow がなければ作らない。"""
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "note", "design"))
+        import make_header
+    except ImportError as e:
+        print("見出し画像は作りませんでした:", e)
+        return False
+    s = seiseki.saved()
+    sub = ""
+    if s:
+        tan = {x["項目"]: x for x in s["periods"]["全期間"]["rows"]}.get("単勝の買い目 (期待値1以上)")
+        if tan:
+            sub = f"過去10年 単勝の買い目 回収率{tan['回収率'] * 100:.1f}%"
+    make_header.style_shinbun(date, make_header.DEFAULT_TITLE, sub).save(path, optimize=True)
+    return True
+
+
+def to_html(md, title, image=None):
     """Note の編集画面に貼り付けられる HTML (見出し・太字・箇条書きだけ使う。Note は表に対応していない)。"""
     body, in_list = [], False
     for line in md.splitlines():
@@ -221,6 +239,8 @@ def to_html(md, title):
     if in_list:
         body.append("</ul>")
     t = html.escape(title)
+    img = (f'<p class="head"><img src="{image}" alt="見出し画像"><br>'
+           f'<a href="{image}" download>見出し画像を保存</a>（Noteの「見出し画像」に設定）</p>\n') if image else ""
     return f"""<!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{t}</title>
@@ -235,11 +255,12 @@ button{{font-size:15px;padding:8px 14px;border-radius:8px;border:1px solid var(-
 color:#fff;cursor:pointer}}
 #msg{{color:var(--sub);align-self:center;font-size:14px}}
 .title{{font-size:1.4em;font-weight:bold;margin:16px 0}}
+.head img{{width:100%;height:auto;border-radius:6px}}
 .paywall{{color:var(--line);font-weight:bold;text-align:center}}
 </style></head><body>
 <div class="bar"><button onclick="copyTitle()">タイトルをコピー</button>
 <button onclick="copyBody()">本文をコピー</button><span id="msg"></span></div>
-<div class="title" id="title">{t}</div>
+{img}<div class="title" id="title">{t}</div>
 <div id="body">
 {chr(10).join(body)}
 </div>
@@ -273,8 +294,9 @@ def main():
     base = os.path.join(out, date.strftime("%Y%m%d"))
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write(md)
+    image = os.path.basename(base) + ".png" if header_image(date, base + ".png") else None
     with open(base + ".html", "w", encoding="utf-8") as f:
-        f.write(to_html(md, title))
+        f.write(to_html(md, title, image))
     write_index(out)
     print(f"{title}\n→ {base}.md / {base}.html")
 
