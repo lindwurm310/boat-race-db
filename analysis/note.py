@@ -194,7 +194,7 @@ def inline(s):
 
 
 def header_image(date, path):
-    """見出し画像 (1280x670、競艇新聞ふう) を note/design/make_header.py で作る。Pillow がなければ作らない。"""
+    """見出し画像 (1280x670、大きな文字＋水面と6艇。Note の一覧で小さく出ても読める) を note/design/make_header.py で作る。Pillow がなければ作らない。"""
     try:
         sys.path.insert(0, os.path.join(ROOT, "note", "design"))
         import make_header
@@ -207,7 +207,7 @@ def header_image(date, path):
         tan = {x["項目"]: x for x in s["periods"]["全期間"]["rows"]}.get("単勝の買い目 (期待値1以上)")
         if tan:
             sub = f"過去10年 単勝の買い目 回収率{tan['回収率'] * 100:.1f}%"
-    make_header.style_shinbun(date, make_header.DEFAULT_TITLE, sub).save(path, optimize=True)
+    make_header.style_race(date, make_header.DEFAULT_TITLE, sub).save(path, optimize=True)
     return True
 
 
