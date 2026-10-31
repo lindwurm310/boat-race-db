@@ -13,6 +13,7 @@ GitHub Pages の note/ に置く。
 import argparse
 import datetime as dt
 import html
+import json
 import os
 import re
 import string
@@ -28,6 +29,7 @@ import seiseki  # noqa: E402
 TEMPLATE = os.path.join(HERE, "note", "template.md")
 WEEK = "月火水木金土日"
 PRICE = 300  # 記事の価格 (円)
+TAGS = ["ボートレース", "競艇", "ボートレース予想", "競艇予想", "データ分析"]  # Note のハッシュタグ (5つ)
 # 有料ラインの位置。Note の「有料エリア設定」でこの行のところにラインを引く
 PAYWALL = "---\n\n**（ここから有料エリア）**\n\n---"
 
@@ -180,12 +182,17 @@ def build(date, pred_dir, price=PRICE):
     v = dict(
         TITLE=f"【{jp_date(date)}】55万レースのデータベースからみる統計学の予想" + (f"（単勝{n}点）" if n else ""),
         DATE_JP=jp_date(date), RACES=len(p), VENUES="・".join(first.index), PRICE=price,
+        MADE_AT=f"{jp_date(made)} {made:%H}時" if (made := dt.datetime.now()).date() < date else "当日の朝",
+        LATER="番組表があとから出た場は、この記事には入っていません。" if made.date() < date else "",
         BACKTEST=bt, BT_FROM=bt_from, BT_TO=bt_to, RECENT=recent_block(pred_dir, date), PAYWALL=PAYWALL,
         PICKS=picks, PICK_RACES=pick_races, PICK_N=n, SOLID=solid, SOLID_N=solid_n, ALL_RACES=all_races_block(p))
     with open(TEMPLATE, encoding="utf-8") as f:
         text = f.read()
     text = re.sub(r"<!--.*?-->\s*", "", text, flags=re.S)  # ひな形の説明は記事に入れない
-    return string.Template(text).substitute(v), v["TITLE"]
+    meta = dict(date=date.isoformat(), title=v["TITLE"], price=price, tags=TAGS, venues=list(first.index),
+                races=len(p), picks=n, paid_line_after="（ここから有料エリア）",
+                made_at=dt.datetime.now().isoformat(timespec="minutes"))
+    return string.Template(text).substitute(v), v["TITLE"], meta
 
 
 def inline(s):
@@ -288,7 +295,7 @@ def main():
     a = ap.parse_args()
     rel = {"today": 0, "tomorrow": 1}
     date = dt.date.today() + dt.timedelta(days=rel[a.date]) if a.date in rel else dt.date.fromisoformat(a.date)
-    md, title = build(date, a.pred, a.price)
+    md, title, meta = build(date, a.pred, a.price)
     out = a.out or os.path.join(a.pred, "note")
     os.makedirs(out, exist_ok=True)
     base = os.path.join(out, date.strftime("%Y%m%d"))
@@ -297,6 +304,10 @@ def main():
     image = os.path.basename(base) + ".png" if header_image(date, base + ".png") else None
     with open(base + ".html", "w", encoding="utf-8") as f:
         f.write(to_html(md, title, image))
+    stem = os.path.basename(base)
+    meta |= dict(html=stem + ".html", md=stem + ".md", image=image)
+    with open(os.path.join(out, "latest.json"), "w", encoding="utf-8") as f:  # 17時の自動投稿が読む
+        json.dump(meta, f, ensure_ascii=False, indent=1)
     write_index(out)
     print(f"{title}\n→ {base}.md / {base}.html")
 

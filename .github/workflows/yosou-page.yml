@@ -64,15 +64,21 @@ jobs:
           python analysis/yosou.py daily --retrain-days $R
 
       - name: 今日から1週間 (番組表が出ている日) の予想
-        # 前の晩 (yosou-check-today) に Note 記事で出した今日の予想があれば、それを今日の予想として残す
-        # (記事に載せた買い目と答え合わせする買い目を同じにするため)
+        # 前の日の 16:00 (note-daily) に Note 記事で出した今日の予想があれば、そのレースはその予想を残す
+        # (記事の買い目と答え合わせの買い目を同じにするため)。記事のあとに番組表が出た場は朝の予想を足す
         run: |
           T=$(date +%Y%m%d)
-          if [ -f "predictions/$T.csv" ]; then cp "predictions/$T.csv" "$RUNNER_TEMP/night.csv"; fi
+          if [ -f "predictions/$T.csv" ]; then cp "predictions/$T.csv" "$RUNNER_TEMP/note.csv"; fi
           python analysis/yosou.py week || true
-          if [ -f "$RUNNER_TEMP/night.csv" ]; then
-            cp "$RUNNER_TEMP/night.csv" "predictions/$T.csv"
-            echo "今日の予想は前の晩に Note 記事で出したものを使います"
+          if [ -f "$RUNNER_TEMP/note.csv" ] && [ -f "predictions/$T.csv" ]; then
+            python - "$RUNNER_TEMP/note.csv" "predictions/$T.csv" <<'PY'
+          import sys, pandas as pd
+          note, morning = (pd.read_csv(p, encoding="utf-8-sig", dtype=str) for p in sys.argv[1:])
+          add = morning[~morning["race_id"].isin(note["race_id"])]
+          out = pd.concat([note, add]).sort_values(["締切", "場"])
+          out.to_csv(sys.argv[2], index=False, encoding="utf-8-sig")
+          print(f"今日の予想: 記事に出した {len(note)} レース + 朝に足した {len(add)} レース")
+          PY
           fi
 
       - name: ページを作る
@@ -80,14 +86,6 @@ jobs:
           python analysis/site.py --out site
           find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
           touch site/.nojekyll
-
-      - name: Note 記事の下書き (前の晩に作れなかったときだけ今日の分を作る)
-        run: |
-          mkdir -p site/note
-          T=$(date +%Y%m%d)
-          if [ ! -f "site/note/$T.html" ] && [ -f "predictions/$T.csv" ]; then
-            python analysis/note.py --date today --out site/note
-          fi
 
       - name: gh-pages に置く
         run: |
