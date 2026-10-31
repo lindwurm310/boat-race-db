@@ -1,5 +1,5 @@
-# 毎日17:00に note_post.bat を動かすタスクを登録する。PowerShell で一度だけ実行:
-#   powershell -ExecutionPolicy Bypass -File note\post\install_task.ps1
+﻿# 毎日17:00に note_post.bat を動かすタスクを登録する。PowerShell で一度だけ実行:
+#   powershell -ExecutionPolicy Bypass -File .\note\post\install_task.ps1
 # やめるとき: Unregister-ScheduledTask -TaskName "BoatRaceNotePost" -Confirm:$false
 $bat = Join-Path $PSScriptRoot "note_post.bat"
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$bat`""

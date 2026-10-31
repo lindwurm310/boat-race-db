@@ -12,8 +12,8 @@
 1. このリポジトリをパソコンに置く（`git pull` で最新にしておく）。
 2. Claude Code を最新にし（`claude --version` が 2.1.302 以上）、`/login` でログインしておく（API キーでは Chrome 連携が使えない）。
 3. Chrome に Claude in Chrome 拡張を入れて、note.com にログインしたままにしておく。
-4. PowerShell で `powershell -ExecutionPolicy Bypass -File note\post\install_task.ps1` を実行する。
-5. 試運転: `note\post\note_post.bat test` を実行する。「投稿する」の直前で止まるので、Chrome の画面と log を確かめる。
+4. リポジトリのフォルダの PowerShell で `powershell -ExecutionPolicy Bypass -File .\note\post\install_task.ps1` を実行する。
+5. 試運転: `.\note\post\note_post.bat test` を実行する。「投稿する」の直前で止まるので、Chrome の画面と log を確かめる。
    試運転で止められたり許可を聞かれたりした操作は、`/permissions` や Chrome 拡張の設定で許可しておく。
 
 ## 注意
