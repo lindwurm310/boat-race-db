@@ -1,6 +1,7 @@
 name: yosou-check-today
 # 毎晩 22:30 (日本時間) に、その日の予想を boatrace.jp の結果ページで答え合わせして GitHub Pages に置く。
 # 成績ファイル (K) は翌日にならないと出ないので当日はこちら。翌朝の yosou-page が公式の成績ファイルでやり直す。
+# そのあと明日の番組表が出ていれば明日を予想し、Note 記事の下書き (analysis/note.py) を GitHub Pages の note/ に置く。
 on:
   schedule:
     - cron: "30 13 * * *"   # UTC 13:30 = 日本時間 22:30
@@ -36,6 +37,27 @@ jobs:
       - run: pip install -r requirements.txt
       - name: 今日の答え合わせ (1レース1秒、全場で数分〜30分)
         run: python analysis/yosou.py check --date today
+      - name: restore DB (朝の実行のもの。ここでは保存しない)
+        uses: actions/cache/restore@v4
+        with:
+          path: boatrace.sqlite
+          key: db-${{ github.run_id }}
+          restore-keys: db-
+      - name: restore model
+        uses: actions/cache/restore@v4
+        with:
+          path: model
+          key: model-${{ github.run_id }}
+          restore-keys: model-
+      - name: 明日の予想と Note 記事の下書き
+        # 番組表がまだ出ていなければ何もしない (翌朝の yosou-page が当日分の記事を作る)
+        run: |
+          mkdir -p site/note
+          if [ -s boatrace.sqlite ] && [ -f model/win.txt ] && python analysis/yosou.py predict --date tomorrow; then
+            python analysis/note.py --date tomorrow --out site/note
+          else
+            echo "明日の予想を作れませんでした (番組表がまだ公開されていない・DB やモデルがないなど)"
+          fi
       - name: ページを作る
         run: |
           python analysis/site.py --out site

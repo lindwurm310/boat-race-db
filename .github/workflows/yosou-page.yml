@@ -64,13 +64,30 @@ jobs:
           python analysis/yosou.py daily --retrain-days $R
 
       - name: 今日から1週間 (番組表が出ている日) の予想
-        run: python analysis/yosou.py week || true
+        # 前の晩 (yosou-check-today) に Note 記事で出した今日の予想があれば、それを今日の予想として残す
+        # (記事に載せた買い目と答え合わせする買い目を同じにするため)
+        run: |
+          T=$(date +%Y%m%d)
+          if [ -f "predictions/$T.csv" ]; then cp "predictions/$T.csv" "$RUNNER_TEMP/night.csv"; fi
+          python analysis/yosou.py week || true
+          if [ -f "$RUNNER_TEMP/night.csv" ]; then
+            cp "$RUNNER_TEMP/night.csv" "predictions/$T.csv"
+            echo "今日の予想は前の晩に Note 記事で出したものを使います"
+          fi
 
       - name: ページを作る
         run: |
           python analysis/site.py --out site
           find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
           touch site/.nojekyll
+
+      - name: Note 記事の下書き (前の晩に作れなかったときだけ今日の分を作る)
+        run: |
+          mkdir -p site/note
+          T=$(date +%Y%m%d)
+          if [ ! -f "site/note/$T.html" ] && [ -f "predictions/$T.csv" ]; then
+            python analysis/note.py --date today --out site/note
+          fi
 
       - name: gh-pages に置く
         run: |
