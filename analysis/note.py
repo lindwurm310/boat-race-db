@@ -6,7 +6,7 @@
 出力は predictions/note/YYYYMMDD.md (記事の元) と YYYYMMDD.html (ブラウザで開いて「本文をコピー」→ Note の
 編集画面に貼り付ける用)。Note には公式の投稿 API がないので、公開は人が Note の画面で行う:
   1. HTML を開いて「タイトルをコピー」「本文をコピー」→ Note の新規記事に貼る
-  2. 「ここから有料」の位置で「有料エリア設定」のラインを引き、価格を決めて公開
+  2. 「（ここから有料エリア）」の位置で「有料エリア設定」のラインを引き、価格 (既定 300円) を確かめて公開
 GitHub Actions (.github/workflows/yosou-check-today.yml) が毎晩、当日の答え合わせのあとに明日の分を作り、
 GitHub Pages の note/ に置く。
 """
@@ -27,7 +27,9 @@ import seiseki  # noqa: E402
 
 TEMPLATE = os.path.join(HERE, "note", "template.md")
 WEEK = "月火水木金土日"
-PAYWALL = "――――――　ここから有料（Noteの「有料エリア設定」でこの位置にラインを引く）　――――――"
+PRICE = 300  # 記事の価格 (円)
+# 有料ラインの位置。Note の「有料エリア設定」でこの行のところにラインを引く
+PAYWALL = "---\n\n**（ここから有料エリア）**\n\n---"
 
 
 def jp_date(d):
@@ -115,42 +117,55 @@ def hit_list(pred_dir, d):
     return [f"- {r['場']} {int(r['R'])}R　{r['結果'][0]}号艇　払戻 {int(r['単勝払戻']):,}円" for _, r in c.iterrows()]
 
 
+def by_deadline(p):
+    return p.sort_values(["締切", "場", "R"], kind="stable")
+
+
 def picks_block(p):
-    """単勝の買い目 (期待値1以上) を場ごとに。"""
+    """単勝の買い目 (期待値1以上)。締切順に1行1レース「- 10:01　徳山4R　**2・3号艇**（1.07・1.00）」。"""
     if "単勝買い目" not in p:
-        return "（この日は予想オッズのモデルがないので、単勝の買い目はありません）", 0
-    buy = p[p["単勝買い目"].fillna("").str.strip() != ""]
+        return "（この日は予想オッズのモデルがないので、単勝の買い目はありません）", 0, 0
+    buy = by_deadline(p[p["単勝買い目"].fillna("").str.strip() != ""])
     if buy.empty:
-        return "この日は期待値1以上の艇がありませんでした。", 0
+        return "この日は期待値が1を超えた艇がありませんでした。", 0, 0
     out, n = [], 0
-    for venue, g in buy.groupby("場", sort=False):
-        out.append(f"**{venue}**")
-        for _, r in g.iterrows():
-            lanes = str(r["単勝買い目"]).split()
-            evs = str(r.get("買い目の期待値", "")).split()
-            items = []
-            for i, l in enumerate(lanes):
-                odds = r.get(f"{l}号艇の予想オッズ")
-                ev = evs[i] if i < len(evs) else ""
-                items.append(f"**{l}号艇**（期待値 {ev}・予想オッズ {odds}倍）")
-                n += 1
-            out.append(f"- {int(r['R'])}R　締切 {r['締切']}　" + "、".join(items))
-        out.append("")
-    return "\n".join(out).rstrip(), n
+    for _, r in buy.iterrows():
+        lanes = str(r["単勝買い目"]).split()
+        evs = str(r.get("買い目の期待値", "")).split()
+        n += len(lanes)
+        out.append(f"- {r['締切']}　{r['場']}{int(r['R'])}R　**{'・'.join(lanes)}号艇**（{'・'.join(evs)}）")
+    return "\n".join(out), len(buy), n
+
+
+SOLID_MIN = 0.7  # 本命が堅いレース: 本命の1着確率がこれ以上
+
+
+def solid_block(p):
+    """本命が堅いレース。「- **08:35 鳴門1R**　◎1 79%　本線 1-2-3（5点 123・124・132・142・134）」。"""
+    s = by_deadline(p[p["本命1着確率"] >= SOLID_MIN])
+    if s.empty:
+        return f"この日は本命の1着確率が{SOLID_MIN:.0%}以上のレースがありませんでした。", 0
+    out = []
+    for _, r in s.iterrows():
+        five = "・".join(t.replace("-", "") for t in str(r["3連単上位5点"]).split())
+        out.append(f"- **{r['締切']} {r['場']}{int(r['R'])}R**　◎{int(r['本命'])} {r['本命1着確率'] * 100:.0f}%　"
+                   f"本線 {r['予想着順']}（5点 {five}）")
+    return "\n".join(out), len(s)
 
 
 def all_races_block(p):
+    """場ごと (最初のレースが早い場から) に「- 1R 08:35　◎1 79%　1-2-3」。"""
     out = []
     for venue, g in p.groupby("場", sort=False):
         out.append(f"**{venue}**")
+        out.append("")
         for _, r in g.sort_values("R").iterrows():
-            out.append(f"- {int(r['R'])}R　{r['締切']}　◎{int(r['本命'])} {r['本命選手']} {r['本命1着確率'] * 100:.0f}%　"
-                       f"予想 {r['予想着順']}")
+            out.append(f"- {int(r['R'])}R {r['締切']}　◎{int(r['本命'])} {r['本命1着確率'] * 100:.0f}%　{r['予想着順']}")
         out.append("")
     return "\n".join(out).rstrip()
 
 
-def build(date, pred_dir):
+def build(date, pred_dir, price=PRICE):
     path = os.path.join(pred_dir, date.strftime("%Y%m%d") + ".csv")
     if not os.path.exists(path):
         sys.exit(f"予想ファイルがありません: {path} (先に yosou.py predict --date {date})")
@@ -159,15 +174,14 @@ def build(date, pred_dir):
     p["場"] = pd.Categorical(p["場"], categories=list(first.index), ordered=True)
     p = p.sort_values(["場", "R"])
     p["場"] = p["場"].astype(str)
-    picks, n = picks_block(p)
+    picks, pick_races, n = picks_block(p)
+    solid, solid_n = solid_block(p)
     bt, bt_from, bt_to = backtest_block()
-    hit_races = (p["単勝買い目"].fillna("").str.strip() != "").sum() if "単勝買い目" in p else 0
     v = dict(
         TITLE=f"【{jp_date(date)}】55万レースのデータベースからみる統計学の予想" + (f"（単勝{n}点）" if n else ""),
-        DATE_JP=jp_date(date), RACES=len(p), BACKTEST=bt, BT_FROM=bt_from, BT_TO=bt_to,
-        RECENT=recent_block(pred_dir, date), PAYWALL=PAYWALL, PICKS=picks,
-        PICKS_SUMMARY=f"{p['場'].nunique()}場・{len(p)}レースのうち、単勝の買い目があるのは{hit_races}レース・{n}点です。",
-        ALL_RACES=all_races_block(p))
+        DATE_JP=jp_date(date), RACES=len(p), VENUES="・".join(first.index), PRICE=price,
+        BACKTEST=bt, BT_FROM=bt_from, BT_TO=bt_to, RECENT=recent_block(pred_dir, date), PAYWALL=PAYWALL,
+        PICKS=picks, PICK_RACES=pick_races, PICK_N=n, SOLID=solid, SOLID_N=solid_n, ALL_RACES=all_races_block(p))
     with open(TEMPLATE, encoding="utf-8") as f:
         text = f.read()
     text = re.sub(r"<!--.*?-->\s*", "", text, flags=re.S)  # ひな形の説明は記事に入れない
@@ -198,7 +212,9 @@ def to_html(md, title):
             body.append(f"<h3>{inline(line[4:])}</h3>")
         elif line.startswith("## "):
             body.append(f"<h2>{inline(line[3:])}</h2>")
-        elif line == PAYWALL:
+        elif line == "---":
+            body.append("<hr>")
+        elif line == "**（ここから有料エリア）**":
             body.append(f'<p class="paywall">{inline(line)}</p>')
         elif line.strip():
             body.append(f"<p>{inline(line)}</p>")
@@ -247,10 +263,11 @@ def main():
     ap.add_argument("--date", default="tomorrow", help="記事にする日 (YYYY-MM-DD / today / tomorrow)")
     ap.add_argument("--pred", default=os.path.join(ROOT, "predictions"))
     ap.add_argument("--out", help="出力先 (既定: <pred>/note)")
+    ap.add_argument("--price", type=int, default=PRICE, help="記事の価格 (円)")
     a = ap.parse_args()
     rel = {"today": 0, "tomorrow": 1}
     date = dt.date.today() + dt.timedelta(days=rel[a.date]) if a.date in rel else dt.date.fromisoformat(a.date)
-    md, title = build(date, a.pred)
+    md, title = build(date, a.pred, a.price)
     out = a.out or os.path.join(a.pred, "note")
     os.makedirs(out, exist_ok=True)
     base = os.path.join(out, date.strftime("%Y%m%d"))
