@@ -1,0 +1,76 @@
+name: note-daily
+# 毎日 16:00 (日本時間) に明日の予想をして、Note 記事 (本文・見出し画像・タグ・価格) を GitHub Pages の note/ に置く。
+# 17:00 にあきさんのパソコンのタスク (note/post/) が note/latest.json を読んで Note に投稿する。
+# 16:30 にもう一度動き、16:00 に作れなかったとき (番組表がまだ・Actions の遅れ) だけ作り直す。
+on:
+  schedule:
+    - cron: "0 7 * * *"    # UTC 07:00 = 日本時間 16:00
+    - cron: "30 7 * * *"   # UTC 07:30 = 日本時間 16:30 (予備)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: yosou-page
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  PYTHONUTF8: "1"
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: checkout gh-pages
+        run: |
+          git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
+          mkdir -p predictions site/note
+          cp -r site/history/. predictions/
+      - name: もう明日の記事があれば何もしない
+        id: done
+        run: |
+          T=$(date -d tomorrow +%F)
+          if [ -f site/note/latest.json ] && grep -q "\"date\": \"$T\"" site/note/latest.json; then
+            echo "明日 ($T) の記事は作成済み"; echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.done.outputs.skip != '1'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - if: steps.done.outputs.skip != '1'
+        run: pip install -r requirements.txt
+      - name: restore DB (朝の実行のもの。ここでは保存しない)
+        if: steps.done.outputs.skip != '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: boatrace.sqlite
+          key: db-${{ github.run_id }}
+          restore-keys: db-
+      - name: restore model
+        if: steps.done.outputs.skip != '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: model
+          key: model-${{ github.run_id }}
+          restore-keys: model-
+      - name: 明日の予想と記事
+        if: steps.done.outputs.skip != '1'
+        run: |
+          if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
+          python analysis/yosou.py predict --date tomorrow
+          python analysis/note.py --date tomorrow --out site/note
+          find predictions -maxdepth 1 -name '*.csv' -exec cp {} site/history/ \;
+      - name: gh-pages に置く
+        if: steps.done.outputs.skip != '1'
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Note記事 $(date -d tomorrow +%F)" || echo "変更なし"
+          git push origin gh-pages

@@ -4,3 +4,4 @@ raw/
 __pycache__/
 model/
 predictions/
+note/post/log/
