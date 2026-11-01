@@ -5,7 +5,8 @@
 2. 毎日 17:00 にあきさんのパソコンのタスク `BoatRaceNotePost` が `note_post.bat` を動かす。
    Claude Code が Chrome（Claude in Chrome 拡張）で note.com を操作し、`post_prompt.md` の手順で
    下書き作成 → 見出し画像 → 本文 → 有料300円・有料ライン・タグ → 投稿 まで行う。
-3. 結果は `note/post/log/YYYYMMDD.txt` に残る（`OK` / `SKIP` / `NG`）。
+3. 結果は `log/YYYY-MM-DD.txt` に残る（`OK` / `SKIP` / `NG`）。記事ができるのが遅れた日のために、19:00 まで30分ごとにもう一度動く（投稿済み・記事なしなら Claude は呼ばない）。
+4. GitHub の定時実行は数時間遅れることがあるため、毎日 15:47 に Claude の定時タスクが `note-daily` を起動する。
 
 ## 準備（一度だけ）
 

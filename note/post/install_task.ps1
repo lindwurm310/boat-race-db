@@ -4,6 +4,9 @@
 $bat = Join-Path $PSScriptRoot "note_post.bat"
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c `"$bat`""
 $trigger = New-ScheduledTaskTrigger -Daily -At 17:00
+# 記事ができるのが遅れた日のために、19:00 まで30分ごとにもう一度動かす (投稿済みならすぐ終わる)
+$rep = New-ScheduledTaskTrigger -Once -At 17:00 -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Hours 2)
+$trigger.Repetition = $rep.Repetition
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName "BoatRaceNotePost" -Action $action -Trigger $trigger -Settings $settings `
   -Description "Note に明日のボートレース予想記事を投稿する" -Force
