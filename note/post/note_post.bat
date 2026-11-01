@@ -5,6 +5,7 @@ rem 条件: パソコンが起動していて、Chrome が開き、note.com に�
 rem 試運転: note_post.bat test  (「投稿する」の直前で止める)
 chcp 65001 >nul
 cd /d "%~dp0"
+set PATH=%USERPROFILE%\.local\bin;%PATH%
 if exist "post_prompt.md" (set PROMPT_FILE=post_prompt.md) else (set PROMPT_FILE=note\post\post_prompt.md)
 if not exist "log" mkdir "log"
 for /f %%d in ('powershell -NoProfile -Command "(Get-Date).AddDays(1).ToString('yyyy-MM-dd')"') do set TOMORROW=%%d
