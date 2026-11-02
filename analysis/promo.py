@@ -3,13 +3,14 @@
   python analysis/promo.py --out site              predictions の予想・答え合わせから作る
 
 作るもの
-  site/jisseki/index.html  公開した予想の実戦成績。外れも含めた全日・通算・公開時刻の記録へのリンク・注意書き
-  site/jisseki/og.png      実戦成績の画像 (1200x630)。ページの OGP 画像なので、X に URL を貼るとこの画像が出る
+  site/jisseki/index.html  公開した予想の実戦成績。外れも含めた全日・通算・注意書き (自分で見る用)
+  site/jisseki/og.png      実戦成績の画像 (1200x630)。X の夜・週の投稿に添付する
   site/sns/index.html      X に投稿する文 (夕方の記事告知・朝の無料予想・夜の結果・週のまとめ)。コピーと「Xで投稿」ボタン
   site/sns/latest.json     同じ投稿文 (ほかのツールから読む用)
 
 検証 (過去10年を予想し直したもの) と実戦 (レース前に公開した予想) は、どのページ・投稿でも分けて書く。
 X は画面の自動操作による投稿を禁止しているので、投稿は「Xで投稿」ボタン (投稿画面が文入りで開く) で人が押す。
+GitHub (github.com・github.io) の URL は投稿文に入れない。誘導先は note だけにする。
 """
 import argparse
 import datetime as dt
@@ -29,7 +30,6 @@ import seiseki  # noqa: E402
 
 SITE = "https://lindwurm310.github.io/boat-race-db"
 NOTE = "https://note.com/lindwurm310"
-REPO = "https://github.com/lindwurm310/boat-race-db"
 FONTS = os.path.join(ROOT, "note", "design", "fonts")
 WEEK = "月火水木金土日"
 TAGS = "#ボートレース予想 #競艇予想"
@@ -117,10 +117,6 @@ def intent(text):
     return "https://x.com/intent/tweet?text=" + urllib.parse.quote(text)
 
 
-def jisseki_url(d):
-    return f"{SITE}/jisseki/?d={d.replace('-', '')}"  # 日付をつけると X が新しい画像を読み直す
-
-
 def posts(pred, out, ds, today):
     items = []
     t = total(ds)
@@ -164,7 +160,7 @@ def posts(pred, out, ds, today):
         if d["cost"] and d["got"] < d["cost"]:
             lines.append("1日ごとのぶれは大きいので、通算で見てください")
         lines += ["", f"{jp(t['first'])}からの通算: {t['n']}点 回収率{pct(t['rate'])}",
-                  f"外れも含めた全件: {jisseki_url(d['date'])}", "", TAGS]
+                  f"毎日の予想はnoteで {NOTE}", "", TAGS]
         if weight("\n".join(lines)) > 280:  # 長すぎるときは補足の行を外す
             lines = [x for x in lines if not x.startswith("1日ごとのぶれ")]
         items.append(dict(kind="夜", when=f"{jp(d['date'])} 22時半以降 (答え合わせの後)", text="\n".join(lines)))
@@ -176,7 +172,7 @@ def posts(pred, out, ds, today):
                 f"本命の1着率 {pct(w['fav'])}（{w['races']:,}レース）\n")
         if bt:
             text += f"過去10年の検証は{pct(bt['rate'])}。実戦の数字を毎週そのまま報告します\n"
-        text += f"{jisseki_url(d['date'])}\n\n{TAGS}\n{FOOT}"
+        text += f"{NOTE}\n\n{TAGS}\n{FOOT}"
         items.append(dict(kind="週", when="月曜の夜", text=text))
     for it in items:
         if weight(it["text"]) > 280:
@@ -333,8 +329,7 @@ def jisseki_page(ds, bt):
         rows.append(f"<tr><td>{jp(x['date'])}</td><td>{x['races']}</td><td>{pct(x['fav'])}</td><td>{x['n']}</td><td>{x['hit']}</td>"
                     f"<td class=\"{'good' if r >= 1 else 'bad'}\">{pct(r) if x['cost'] else '-'}</td>"
                     f"<td>{x['got'] - x['cost']:+,}円</td><td class=\"l\">{html.escape(x['best'])}</td>"
-                    f"<td class=\"l\"><a href=\"../history/{ymd}.csv\">予想</a> ・ <a href=\"../history/{ymd}_check.csv\">結果</a> ・ "
-                    f"<a href=\"{REPO}/commits/gh-pages/history/{ymd}.csv\">公開時刻</a></td></tr>")
+                    f"<td class=\"l\"><a href=\"../history/{ymd}.csv\">予想</a> ・ <a href=\"../history/{ymd}_check.csv\">結果</a></td></tr>")
     notes = "".join(f"<li>{jp(k)}: {html.escape(v)}</li>" for k, v in NOTES.items() if any(x["date"] == k for x in ds))
     btxt = ""
     if bt:
@@ -363,7 +358,6 @@ def jisseki_page(ds, bt):
 <th>最高配当</th><th>記録</th></tr></thead><tbody>
 {''.join(rows)}
 </tbody></table></div>
-<p class="sub">「公開時刻」は GitHub に予想ファイルを置いた時刻の記録です。予想がレース前に出ていたことを誰でも確かめられます。</p>
 {f'<div class="note"><ul>{notes}</ul></div>' if notes else ''}
 {btxt}
 <h2>予想を見る</h2>
@@ -384,7 +378,9 @@ def sns_page(items, made):
     body = f"""<h1>X の投稿文</h1>
 <p class="sub">{made} 更新 ・ 夕方（17時ごろ）・朝（6時ごろ）・夜（22時半ごろ）に作り直します</p>
 <p>「Xで投稿」を押すと、文が入った状態で X の投稿画面が開きます。確かめて「ポスト」を押してください。
-URL を入れた投稿には、実戦成績の画像が自動で付きます。</p>
+夜と週の投稿には、下の成績画像を保存して添付してください。投稿文に GitHub の URL は入れていません。</p>
+<p><a href="../jisseki/og.png" download="seiseki.png"><img src="../jisseki/og.png" alt="実戦成績の画像" style="width:100%;max-width:600px;border-radius:8px"></a><br>
+<a href="../jisseki/og.png" download="seiseki.png">成績画像を保存</a></p>
 {''.join(blocks) or '<p>まだ投稿文がありません。</p>'}
 <h2>決まりごと</h2><div class="note"><ul>
 <li>負けた日も同じ形で出す。当たった日だけ出すと信用を失い、景品表示法の上でも問題になりやすい。</li>
