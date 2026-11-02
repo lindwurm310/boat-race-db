@@ -64,6 +64,7 @@ jobs:
           if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
           python analysis/yosou.py predict --date tomorrow
           python analysis/note.py --date tomorrow --out site/note
+          python analysis/promo.py --out site   # X の投稿文に明日の記事の告知を足す
           find predictions -maxdepth 1 -name '*.csv' -exec cp {} site/history/ \;
       - name: gh-pages に置く
         if: steps.done.outputs.skip != '1'

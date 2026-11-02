@@ -84,6 +84,7 @@ jobs:
       - name: ページを作る
         run: |
           python analysis/site.py --out site
+          python analysis/promo.py --out site   # 実戦成績 (jisseki/) と X の投稿文 (sns/)
           find predictions -maxdepth 1 \( -name '*.csv' -o -name '*.txt' \) -exec cp {} site/history/ \;
           touch site/.nojekyll
 
