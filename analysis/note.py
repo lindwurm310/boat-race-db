@@ -224,7 +224,7 @@ def best_hit(pred_dir, date):
     return max(hits)[1] if hits else ""
 
 
-def header_image(date, path, pred_dir):
+def header_image(date, path, pred_dir, races=None):
     """見出し画像 (1280x670) を note/design/make_header.py で作る。Pillow がなければ作らない。
     hot スタイルの小見出しは、直近の答え合わせで実際に当たった一番高い配当 (利益を約束する言葉は入れない)。"""
     try:
@@ -242,7 +242,9 @@ def header_image(date, path, pred_dir):
             tan = {x["項目"]: x for x in s["periods"]["全期間"]["rows"]}.get("単勝の買い目 (期待値1以上)")
             if tan:
                 sub = f"過去10年 単勝の買い目 回収率{tan['回収率'] * 100:.1f}%"
-    make_header.STYLES[HEADER_STYLE](date, make_header.DEFAULT_TITLE, sub).save(path, optimize=True)
+    args = (date, make_header.DEFAULT_TITLE, sub)
+    img = make_header.STYLES[HEADER_STYLE](*args, races=races) if HEADER_STYLE == "hot" else make_header.STYLES[HEADER_STYLE](*args)
+    img.save(path, optimize=True)
     return True
 
 
@@ -329,7 +331,7 @@ def main():
     base = os.path.join(out, date.strftime("%Y%m%d"))
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write(md)
-    image = os.path.basename(base) + ".png" if header_image(date, base + ".png", a.pred) else None
+    image = os.path.basename(base) + ".png" if header_image(date, base + ".png", a.pred, meta["races"]) else None
     with open(base + ".html", "w", encoding="utf-8") as f:
         f.write(to_html(md, title, image))
     stem = os.path.basename(base)

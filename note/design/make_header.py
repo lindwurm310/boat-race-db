@@ -274,7 +274,7 @@ def style_race(day, title, sub):
     return finish(img, W, H, grain=0.05, seed=dd)
 
 
-def style_hot(day, title, sub):
+def style_hot(day, title, sub, races=None):
     """目を引く版。紺の水面に放射状の光、黄色の大きな回収率、日付の札。
 
     数字は検証どおりのものだけを使う（sub は「過去10年 単勝の買い目」の後ろに出す実績の一言）。
@@ -305,7 +305,11 @@ def style_hot(day, title, sub):
                             fill=WAKU[i], outline=ink, width=3 * S)
         text(d, (x + tile / 2, y + tile / 2 + 3), str(i + 1), font("ZenKakuGothicNew-Black.ttf", 58),
              WAKU_TEXT[i], anchor="mm")
-    text(d, (48, wy + 52), "全国24場・55万レースの記録から", font("ZenKakuGothicNew-Bold.ttf", 30), white, anchor="lm")
+    if races:
+        rs = f"全{races}レースを予想"
+        text(d, (48, wy + 54), rs, fit_font(d, rs, "ZenKakuGothicNew-Black.ttf", 60, x0 - 80), yel, anchor="lm")
+    else:
+        text(d, (48, wy + 52), "全国24場・55万レースの記録から", font("ZenKakuGothicNew-Bold.ttf", 30), white, anchor="lm")
 
     # 左上: 日付の札（赤）
     date_s = f"{m}/{dd}({yb})"
@@ -318,7 +322,7 @@ def style_hot(day, title, sub):
          fit_font(d, head, "ZenKakuGothicNew-Black.ttf", 76, W - (40 + tw + 48 + 28) - 40), white, anchor="lm")
 
     # 主役: 回収率
-    lab = "過去10年の検証 単勝の買い目"
+    lab = "55万レース・過去10年の検証 単勝の買い目"
     text(d, (48, 192), lab, font("ZenKakuGothicNew-Black.ttf", 50), white, anchor="lm")
     big = "回収率107.5%"
     fb = fit_font(d, big, "ZenKakuGothicNew-Black.ttf", 200, W - 96)
@@ -397,6 +401,7 @@ def main():
     ap.add_argument("--style", choices=list(STYLES) + ["all"], default="all")
     ap.add_argument("--title", default=DEFAULT_TITLE, help="改行は \\n")
     ap.add_argument("--sub", default="", help="小見出し（例: 本日の注目 12レース）")
+    ap.add_argument("--races", type=int, help="その日に予想するレース数（hot スタイルで大きく出す）")
     ap.add_argument("--icons", action="store_true", help="アイコンだけ作る")
     a = ap.parse_args()
     OUT.mkdir(exist_ok=True)
@@ -406,7 +411,8 @@ def main():
         title = a.title.replace("\\n", "\n")
         for name in (STYLES if a.style == "all" else [a.style]):
             p = OUT / f"header_{name}_{day:%Y%m%d}.png"
-            STYLES[name](day, title, a.sub).save(p, optimize=True)
+            img = STYLES[name](day, title, a.sub, a.races) if name == "hot" else STYLES[name](day, title, a.sub)
+            img.save(p, optimize=True)
             print(p)
     if a.icons or a.style == "all":
         for name, img in icons().items():
