@@ -318,7 +318,7 @@ def style_hot(day, title, sub):
          fit_font(d, head, "ZenKakuGothicNew-Black.ttf", 76, W - (40 + tw + 48 + 28) - 40), white, anchor="lm")
 
     # 主役: 回収率
-    lab = "過去10年 単勝の買い目"
+    lab = "過去10年の検証 単勝の買い目"
     text(d, (48, 192), lab, font("ZenKakuGothicNew-Black.ttf", 50), white, anchor="lm")
     big = "回収率107.5%"
     fb = fit_font(d, big, "ZenKakuGothicNew-Black.ttf", 200, W - 96)
