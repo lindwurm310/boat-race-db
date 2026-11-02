@@ -274,7 +274,66 @@ def style_race(day, title, sub):
     return finish(img, W, H, grain=0.05, seed=dd)
 
 
-STYLES = {"race": style_race, "note": style_note, "shinbun": style_shinbun, "simple": style_simple}
+def style_hot(day, title, sub):
+    """目を引く版。紺の水面に放射状の光、黄色の大きな回収率、日付の札。
+
+    数字は検証どおりのものだけを使う（sub は「過去10年 単勝の買い目」の後ろに出す実績の一言）。
+    """
+    navy, ink, red, yel, white = "#0d2347", "#141414", "#d7261e", "#ffd400", "#ffffff"
+    img, d = canvas(W, H, navy)
+    m, dd, yb = date_parts(day)
+    # 放射状の光（左上の回収率から広がる）
+    cx, cy = 300, 330
+    for k in range(24):
+        a0 = math.tau * k / 24
+        a1 = a0 + math.tau / 48
+        R = 1600
+        d.polygon([(cx * S, cy * S), ((cx + R * math.cos(a0)) * S, (cy + R * math.sin(a0)) * S),
+                   ((cx + R * math.cos(a1)) * S, (cy + R * math.sin(a1)) * S)], fill="#14305e")
+    # 下の水面と6艇
+    wy = 560
+    d.rectangle([0, wy * S, W * S, H * S], fill="#1d5a96")
+    for k in range(4):
+        y = wy + 14 + k * 26
+        d.line([(x * S, (y + 5 * math.sin(x / 38 + k * 1.7)) * S) for x in range(0, W + 10, 10)],
+               fill="#2a6aa8", width=3 * S)
+    tile, gap = 78, 40
+    x0 = W - 60 - (6 * tile + 5 * gap)
+    for i in range(6):
+        x, y = x0 + i * (tile + gap), wy + 12
+        d.rounded_rectangle([x * S, y * S, (x + tile) * S, (y + tile) * S], radius=8 * S,
+                            fill=WAKU[i], outline=ink, width=3 * S)
+        text(d, (x + tile / 2, y + tile / 2 + 3), str(i + 1), font("ZenKakuGothicNew-Black.ttf", 58),
+             WAKU_TEXT[i], anchor="mm")
+    text(d, (48, wy + 52), "全国24場・55万レースの記録から", font("ZenKakuGothicNew-Bold.ttf", 30), white, anchor="lm")
+
+    # 左上: 日付の札（赤）
+    date_s = f"{m}/{dd}({yb})"
+    fd = font("ZenKakuGothicNew-Black.ttf", 64)
+    tw = d.textlength(date_s, font=fd) / S
+    d.rounded_rectangle([40 * S, 34 * S, (40 + tw + 48) * S, 124 * S], radius=12 * S, fill=red)
+    text(d, (64, 80), date_s, fd, white, anchor="lm")
+    head = "ボートレース予想"
+    text(d, (40 + tw + 48 + 28, 80), head,
+         fit_font(d, head, "ZenKakuGothicNew-Black.ttf", 76, W - (40 + tw + 48 + 28) - 40), white, anchor="lm")
+
+    # 主役: 回収率
+    lab = "過去10年の検証 単勝の買い目"
+    text(d, (48, 192), lab, font("ZenKakuGothicNew-Black.ttf", 50), white, anchor="lm")
+    big = "回収率107.5%"
+    fb = fit_font(d, big, "ZenKakuGothicNew-Black.ttf", 200, W - 96)
+    # 黒い影 → 黄色
+    text(d, (54, 356), big, fb, "#000000", anchor="lm")
+    text(d, (48, 350), big, fb, yel, anchor="lm")
+    if sub:
+        fs = fit_font(d, sub, "ZenKakuGothicNew-Black.ttf", 46, W - 96)
+        sw = d.textlength(sub, font=fs) / S
+        d.rounded_rectangle([40 * S, 456 * S, (40 + sw + 40) * S, 528 * S], radius=10 * S, fill=yel)
+        text(d, (60, 492), sub, fs, ink, anchor="lm")
+    return finish(img, W, H, grain=0.03, seed=dd)
+
+
+STYLES = {"hot": style_hot, "race": style_race, "note": style_note, "shinbun": style_shinbun, "simple": style_simple}
 
 
 # ---------------------------------------------------------------- アイコン（Noteは丸く切り抜かれる）

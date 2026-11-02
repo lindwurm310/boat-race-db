@@ -29,7 +29,7 @@ import seiseki  # noqa: E402
 TEMPLATE = os.path.join(HERE, "note", "template.md")
 WEEK = "月火水木金土日"
 PRICE = 300  # 記事の価格 (円)
-HEADER_STYLE = "race"  # 見出し画像のデザイン (note/design/make_header.py の STYLES)
+HEADER_STYLE = "hot"  # 見出し画像のデザイン (note/design/make_header.py の STYLES)
 TAGS = ["ボートレース", "競艇", "ボートレース予想", "競艇予想", "データ分析"]  # Note のハッシュタグ (5つ)
 # 有料ラインの位置。Note の「有料エリア設定」でこの行のところにラインを引く
 PAYWALL = "---\n\n**（ここから有料エリア）**\n\n---"
@@ -201,20 +201,47 @@ def inline(s):
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
 
 
-def header_image(date, path):
-    """見出し画像 (1280x670) を note/design/make_header.py で作る。Pillow がなければ作らない。"""
+def best_hit(pred_dir, date):
+    """直近の答え合わせで実際に当たった一番高い配当の一言 (例「10/30 唐津9R 3連単1点 3,470円的中」)。なければ空。"""
+    log_path = os.path.join(pred_dir, "log.csv")
+    if not os.path.exists(log_path):
+        return ""
+    days = sorted(d for d in pd.read_csv(log_path, encoding="utf-8-sig")["date"] if d < date.isoformat())
+    if not days:
+        return ""
+    d = dt.date.fromisoformat(days[-1])
+    path = os.path.join(pred_dir, d.strftime("%Y%m%d") + "_check.csv")
+    if not os.path.exists(path):
+        return ""
+    c = read(path)
+    hits = []  # (配当, 一言)
+    for _, r in c.iterrows():
+        where = f"{d.month}/{d.day} {r['場']}{int(r['R'])}R"
+        if r.get("単勝的中", 0) > 0 and r.get("単勝払戻", 0) > 0:
+            hits.append((int(r["単勝払戻"]), f"{where} 単勝 {int(r['単勝払戻']):,}円的中"))
+        if bool(r.get("予想着順的中")) and pd.notna(r.get("三連単配当")):
+            hits.append((int(r["三連単配当"]), f"{where} 3連単1点 {int(r['三連単配当']):,}円的中"))
+    return max(hits)[1] if hits else ""
+
+
+def header_image(date, path, pred_dir):
+    """見出し画像 (1280x670) を note/design/make_header.py で作る。Pillow がなければ作らない。
+    hot スタイルの小見出しは、直近の答え合わせで実際に当たった一番高い配当 (利益を約束する言葉は入れない)。"""
     try:
         sys.path.insert(0, os.path.join(ROOT, "note", "design"))
         import make_header
     except ImportError as e:
         print("見出し画像は作りませんでした:", e)
         return False
-    s = seiseki.saved()
-    sub = ""
-    if s:
-        tan = {x["項目"]: x for x in s["periods"]["全期間"]["rows"]}.get("単勝の買い目 (期待値1以上)")
-        if tan:
-            sub = f"過去10年 単勝の買い目 回収率{tan['回収率'] * 100:.1f}%"
+    if HEADER_STYLE == "hot":
+        sub = best_hit(pred_dir, date)
+    else:
+        s = seiseki.saved()
+        sub = ""
+        if s:
+            tan = {x["項目"]: x for x in s["periods"]["全期間"]["rows"]}.get("単勝の買い目 (期待値1以上)")
+            if tan:
+                sub = f"過去10年 単勝の買い目 回収率{tan['回収率'] * 100:.1f}%"
     make_header.STYLES[HEADER_STYLE](date, make_header.DEFAULT_TITLE, sub).save(path, optimize=True)
     return True
 
@@ -302,7 +329,7 @@ def main():
     base = os.path.join(out, date.strftime("%Y%m%d"))
     with open(base + ".md", "w", encoding="utf-8") as f:
         f.write(md)
-    image = os.path.basename(base) + ".png" if header_image(date, base + ".png") else None
+    image = os.path.basename(base) + ".png" if header_image(date, base + ".png", a.pred) else None
     with open(base + ".html", "w", encoding="utf-8") as f:
         f.write(to_html(md, title, image))
     stem = os.path.basename(base)
