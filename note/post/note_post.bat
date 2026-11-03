@@ -14,6 +14,7 @@ if errorlevel 1 (
   echo %date% %time% SKIP %TOMORROW% article not ready >> "%LOG%"
   exit /b 0
 )
+powershell -NoProfile -Command "$j = Invoke-RestMethod 'https://lindwurm310.github.io/boat-race-db/note/latest.json'; Invoke-WebRequest ('https://lindwurm310.github.io/boat-race-db/note/' + $j.image) -OutFile header.png"
 set ASK=ask_post.txt
 if /i "%1"=="test" set ASK=ask_test.txt
 echo ==== %date% %time% %ASK% >> "%LOG%"

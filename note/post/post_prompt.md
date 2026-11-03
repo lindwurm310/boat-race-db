@@ -14,7 +14,7 @@
 
 1. 新しいタブで `https://lindwurm310.github.io/boat-race-db/note/<html>`（`latest.json` の `html`）を開く。
 2. `https://note.com/notes/new` を開き、新しいテキスト記事を作る。
-3. 見出し画像：`latest.json` の `image`（`https://lindwurm310.github.io/boat-race-db/note/<image>`）をダウンロードし、エディタ上部の画像ボタンからアップロードする。トリミングはそのまま。
+3. 見出し画像：このフォルダの `header.png`（実行前に bat がダウンロード済み。1280×670）を、エディタ上部の画像ボタンからアップロードする。トリミングはそのまま。自分でダウンロードしない。`header.png` がなければ NG として止める。
 4. タイトル：`latest.json` の `title` をそのまま入れる。
 5. 本文：記事ページの「本文をコピー」ボタンを押し、エディタの本文に貼り付ける。見出し・太字・箇条書き・区切り線が残っていることを確かめる。
 6. 「下書き保存」を押す。
