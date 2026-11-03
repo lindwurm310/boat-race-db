@@ -21,4 +21,4 @@ if /i "%1"=="test" set ASK=%PROMPT_FILE% の手順 1〜3 を、明日 (%TOMORROW
 echo ==== %date% %time% %1 >> "%LOG%"
 claude -p "%ASK%" --chrome --permission-mode auto --permission-prompts none --allowedTools "mcp__claude-in-chrome__*" "WebFetch" "Read" >> "%LOG%" 2>&1
 echo ==== exit %errorlevel% >> "%LOG%"
-if /i not "%1"=="test" findstr /c:"OK %TOMORROW%" "%LOG%" >nul && echo posted> "log\posted_%TOMORROW%.txt"
+if /i not "%1"=="test" findstr /r /c:"^OK %TOMORROW% https://note.com/lindwurm310/n/" "%LOG%" >nul && echo posted> "log\posted_%TOMORROW%.txt"
