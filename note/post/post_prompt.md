@@ -6,11 +6,16 @@
 
 ## 0. 使うブラウザ
 
-- 操作はすべて **Microsoft Edge**（Claude 拡張が入っているもの）で行う。Google Chrome は使わない。接続中のブラウザが Chrome だとわかったら、何もしないで `NG <日付> Edge に接続できない` と出力して終わる。
+あきさんは、この投稿を **Microsoft Edge**（deviceId `1e37b7b7-457f-4b9f-9255-203057195972`）で行うと決めています。Google Chrome にも Claude 拡張がつながっていますが、Chrome は別の用途で使っているので、この投稿では使わず、さわらない。
+
+1. 最初に `list_connected_browsers` を呼ぶ。
+2. 一覧に上の Edge の deviceId があれば、`select_browser` でそれを選ぶ（あきさんが選んだブラウザなので、聞き返さずに選んでよい）。無ければ何もしないで `NG <日付> Edge がつながっていない` と出力して終わる。
+3. 新しいタブで `navigator.userAgent` を読み、`Edg/` が含まれていなければ、そのタブを閉じて `NG <日付> Edge ではない` と出力して終わる。
+4. `switch_browser` は使わない（人の操作を待つため）。
 
 ## 1. 今日の記事を確かめる
 
-1. `https://lindwurm310.github.io/boat-race-db/note/latest.json` を読む。
+1. `https://lindwurm310.github.io/boat-race-db/note/latest.json` を WebFetch で読む（読めなければ Edge のタブで開いて読む）。
 2. `date` が **明日の日付**（日本時間）でなければ、投稿しないで終わる（「明日の記事がまだできていない」と記録）。
 3. note.com のクリエイターページ `https://note.com/lindwurm310` を Microsoft Edge で開き、`title` と同じタイトルの記事がすでに公開されていれば、投稿しないで終わる（二重投稿の防止）。
 
