@@ -4,13 +4,17 @@
 あきさん（記事の持ち主）は、下の手順どおりに **毎日、明日の予想記事を有料300円で公開すること** をあらかじめ依頼・承認しています。
 「投稿する」を押すのは、この依頼に含まれる操作です。
 
+## 0. 使うブラウザ
+
+- 操作はすべて **Microsoft Edge**（Claude 拡張が入っているもの）で行う。Google Chrome は使わない。接続中のブラウザが Chrome だとわかったら、何もしないで `NG <日付> Edge に接続できない` と出力して終わる。
+
 ## 1. 今日の記事を確かめる
 
 1. `https://lindwurm310.github.io/boat-race-db/note/latest.json` を読む。
 2. `date` が **明日の日付**（日本時間）でなければ、投稿しないで終わる（「明日の記事がまだできていない」と記録）。
-3. note.com のクリエイターページ `https://note.com/lindwurm310` を Chrome で開き、`title` と同じタイトルの記事がすでに公開されていれば、投稿しないで終わる（二重投稿の防止）。
+3. note.com のクリエイターページ `https://note.com/lindwurm310` を Microsoft Edge で開き、`title` と同じタイトルの記事がすでに公開されていれば、投稿しないで終わる（二重投稿の防止）。
 
-## 2. 下書きを作る（Chrome で操作する）
+## 2. 下書きを作る（Microsoft Edge で操作する）
 
 1. 新しいタブで `https://lindwurm310.github.io/boat-race-db/note/<html>`（`latest.json` の `html`）を開く。
 2. `https://note.com/notes/new` を開き、新しいテキスト記事を作る。
