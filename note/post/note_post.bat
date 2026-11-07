@@ -26,7 +26,7 @@ if /i not "%1"=="test" (
 )
 rem Token saving: at most 2 Claude runs per day (a failed run is retried once, not every 30 min).
 set RUNS=0
-if exist "%LOG%" for /f %%n in ('findstr /c:"ask_post.txt" "%LOG%" ^| find /c /v ""') do set RUNS=%%n
+if exist "%LOG%" for /f %%n in ('%SystemRoot%\System32\findstr.exe /c:"ask_post.txt" "%LOG%" ^| %SystemRoot%\System32\find.exe /c /v ""') do set RUNS=%%n
 if /i not "%1"=="test" if %RUNS% GEQ 2 (
   echo %date% %time% SKIP %TOMORROW% already tried %RUNS% times >> "%LOG%"
   exit /b 0
