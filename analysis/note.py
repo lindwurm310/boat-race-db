@@ -198,6 +198,7 @@ def build(date, pred_dir, price=PRICE):
 
 def inline(s):
     s = html.escape(s)
+    s = re.sub(r"\[(.+?)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', s)  # [文字](URL)
     return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
 
 
