@@ -34,8 +34,8 @@ FONTS = os.path.join(ROOT, "note", "design", "fonts")
 WEEK = "月火水木金土日"
 TAGS = "#ボートレース予想 #競艇予想"
 FOOT = "※過去の成績は将来を保証しません。舟券は20歳から"
-FREE_START = "2026-11-03"  # 朝の無料予想を X に出し始めた日 (これより前の日は夜の結果に載せない)
-FREE_FROM = "09:30"  # 朝の無料予想は、締切がこの時刻以降のレースから選ぶ (朝8時台に投稿する)
+FREE_START = "2026-11-11"  # 告知に無料予想を入れ始めたレースの日 (これより前の日は結果に載せない)
+FREE_FROM = "09:30"  # 無料予想は、締切がこの時刻以降のレースから選ぶ
 # 日ごとの補足 (実戦成績のページに出す)
 NOTES = {
     "2026-10-26": "公開初日。予想の公開が16時台になった (その日の結果は使っていないモデルの予想)。",
@@ -99,7 +99,7 @@ def backtest():
 # ---------- 投稿文 ----------
 
 def free_pick(p):
-    """朝の無料予想: 単勝の買い目が1艇だけのレースから、その艇の1着確率が一番高いもの (締切 FREE_FROM 以降)。"""
+    """無料予想: 単勝の買い目が1艇だけのレースから、その艇の1着確率が一番高いもの (締切 FREE_FROM 以降)。"""
     if "単勝買い目" not in p:
         return None
     b = p[p["単勝買い目"].fillna("").str.strip().str.fullmatch(r"\d")]
@@ -118,32 +118,11 @@ def intent(text):
 
 
 def posts(pred, out, ds, today):
+    """X の投稿文。毎日17時の自動投稿 (note 公開のあと) が「結果」(月曜は「週」) と「告知」をこの順に出す。"""
     items = []
     t = total(ds)
     bt = backtest()
-    # 夕方: 明日の Note 記事の告知 (note-daily が作った latest.json)
-    lj = os.path.join(out, "note", "latest.json")
-    if os.path.exists(lj):
-        with open(lj, encoding="utf-8") as f:
-            m = json.load(f)
-        if m["date"] > today:
-            text = (f"【明日{jp(m['date'])}の予想を公開しました】\n"
-                    f"{'・'.join(m['venues'][:6])}{'ほか' if len(m['venues']) > 6 else ''} 全{m['races']}レース\n"
-                    f"単勝の買い目 {m['picks']}点を締切順に。外れも含めて翌日に全部答え合わせします\n\n"
-                    f"{NOTE}\n\n{TAGS}\n{FOOT}")
-            items.append(dict(kind="夕方", when=f"{jp(today)} 17時ごろ (記事の公開後)", text=text))
-    # 朝: 今日の無料予想
-    pp = os.path.join(pred, today.replace("-", "") + ".csv")
-    if os.path.exists(pp):
-        fp = free_pick(read(pp))
-        if fp:
-            text = (f"【今日の無料予想】{jp(today)}\n"
-                    f"{fp['venue']}{fp['R']}R（{fp['deadline']}締切）単勝 {fp['lane']}号艇\n"
-                    f"1着の確率 {fp['prob'] * 100:.0f}%・期待値 {fp['ev']}\n\n"
-                    f"今日の単勝の買い目は全{fp['picks']}点。全部はnoteで\n{NOTE}\n\n"
-                    f"#{fp['venue']} {TAGS}\n{FOOT}")
-            items.append(dict(kind="朝", when=f"{jp(today)} 8時台", text=text, free=fp))
-    # 夜: いちばん新しい答え合わせの日の結果
+    # 結果: いちばん新しい答え合わせの日 (17時の時点では前の日)
     if ds:
         d = ds[-1]
         lines = [f"【結果】{jp(d['date'])} 単勝の買い目 {d['n']}点中{d['hit']}本的中、回収率{pct(d['got'] / d['cost']) if d['cost'] else '-'}"]
@@ -156,14 +135,14 @@ def posts(pred, out, ds, today):
             if len(row):
                 won = str(row.iloc[0]["結果"])[:1] == str(fp["lane"])
                 pay = int(row.iloc[0]["単勝払戻"]) if won else 0
-                lines.append(f"朝の無料予想 {fp['venue']}{fp['R']}R {fp['lane']}号艇: " + (f"的中 {pay:,}円" if won else "外れ"))
+                lines.append(f"無料予想 {fp['venue']}{fp['R']}R {fp['lane']}号艇: " + (f"的中 {pay:,}円" if won else "外れ"))
         if d["cost"] and d["got"] < d["cost"]:
             lines.append("1日ごとのぶれは大きいので、通算で見てください")
         lines += ["", f"{jp(t['first'])}からの通算: {t['n']}点 回収率{pct(t['rate'])}",
                   f"毎日の予想はnoteで {NOTE}", "", TAGS]
         if weight("\n".join(lines)) > 280:  # 長すぎるときは補足の行を外す
             lines = [x for x in lines if not x.startswith("1日ごとのぶれ")]
-        items.append(dict(kind="夜", when=f"{jp(d['date'])} 22時半以降 (答え合わせの後)", text="\n".join(lines)))
+        items.append(dict(kind="結果", when="毎日17時 (月曜は週のまとめ)", text="\n".join(lines)))
         # 週のまとめ: 直近7日 (月曜に投稿)
         start = (dt.date.fromisoformat(d["date"]) - dt.timedelta(days=6)).isoformat()
         w = total([x for x in ds if x["date"] >= start])
@@ -173,7 +152,27 @@ def posts(pred, out, ds, today):
         if bt:
             text += f"過去10年の検証は{pct(bt['rate'])}。実戦の数字を毎週そのまま報告します\n"
         text += f"{NOTE}\n\n{TAGS}\n{FOOT}"
-        items.append(dict(kind="週", when="月曜の夜", text=text))
+        items.append(dict(kind="週", when="月曜17時", text=text))
+    # 告知: 明日の note 記事と、その中から無料で1点 (note-daily が作った latest.json と明日の予想)
+    lj = os.path.join(out, "note", "latest.json")
+    if os.path.exists(lj):
+        with open(lj, encoding="utf-8") as f:
+            m = json.load(f)
+        if m["date"] > today:
+            pp = os.path.join(pred, m["date"].replace("-", "") + ".csv")
+            fp = None
+            if os.path.exists(pp):  # 記事に入っている場のレースから選ぶ
+                pr = read(pp)
+                fp = free_pick(pr[pr["場"].isin(m["venues"])])
+            text = f"【{jp(m['date'])}の予想を公開しました】\n"
+            if fp:
+                text += (f"無料で1点: {fp['venue']}{fp['R']}R（{fp['deadline']}締切）単勝 {fp['lane']}号艇"
+                         f"（1着の確率{fp['prob'] * 100:.0f}%・期待値{fp['ev']}）\n\n")
+            text += (f"{'・'.join(m['venues'][:5])}{'ほか' if len(m['venues']) > 5 else ''}の全{m['races']}レース、"
+                     f"単勝の買い目{m['picks']}点はnoteで\n{{note記事のURL}}\n\n"
+                     + (f"#{fp['venue']} " if fp else "") + f"{TAGS}\n{FOOT}")
+            items.append(dict(kind="告知", when="毎日17時 (note の公開後。{note記事のURL} を公開した記事のURLに置き換える)",
+                              text=text, free=fp))
     for it in items:
         if weight(it["text"]) > 280:
             print(f"注意: {it['kind']}の投稿文が280を超えています ({weight(it['text'])})")
@@ -376,9 +375,9 @@ def sns_page(items, made):
 <div class="btns"><a href="{html.escape(intent(it['text']))}" target="_blank" rel="noopener">Xで投稿</a>
 <button onclick="cp('p{i}',this)">コピー</button><span class="len">{weight(it['text'])}/280</span></div></div>""")
     body = f"""<h1>X の投稿文</h1>
-<p class="sub">{made} 更新 ・ 夕方（17時ごろ）・朝（6時ごろ）・夜（22時半ごろ）に作り直します</p>
-<p>「Xで投稿」を押すと、文が入った状態で X の投稿画面が開きます。確かめて「ポスト」を押してください。
-夜と週の投稿には、下の成績画像を保存して添付してください。投稿文に GitHub の URL は入れていません。</p>
+<p class="sub">{made} 更新 ・ 16時・朝6時・夜22時半に作り直します</p>
+<p>毎日17時の自動投稿が、note の公開のあとに「結果」（月曜は「週」）と「告知」を投稿します。
+手で出すときは「Xで投稿」を押すと、文が入った状態で X の投稿画面が開きます。成績画像は保存して添付できます。投稿文に GitHub の URL は入れていません。</p>
 <p><a href="../jisseki/og.png" download="seiseki.png"><img src="../jisseki/og.png" alt="実戦成績の画像" style="width:100%;max-width:600px;border-radius:8px"></a><br>
 <a href="../jisseki/og.png" download="seiseki.png">成績画像を保存</a></p>
 {''.join(blocks) or '<p>まだ投稿文がありません。</p>'}
@@ -423,7 +422,10 @@ def main():
     with open(os.path.join(a.out, "sns", "index.html"), "w", encoding="utf-8") as f:
         f.write(sns_page(items, made))
     with open(os.path.join(a.out, "sns", "latest.json"), "w", encoding="utf-8") as f:
-        json.dump({"made": made, "posts": [{k: v for k, v in it.items() if k != "free"} for it in items]},
+        monday = dt.date.fromisoformat(a.today).weekday() == 0
+        order = ["週" if monday else "結果", "告知"]  # 17時の自動投稿が、この順に投稿する
+        json.dump({"made": made, "today": a.today, "post_today": [k for k in order if any(i["kind"] == k for i in items)],
+                   "posts": [{k: v for k, v in it.items() if k != "free"} for it in items]},
                   f, ensure_ascii=False, indent=1)
     t = total(ds)
     print(f"{a.out}/jisseki: {t['days']}日 単勝 {t['n']}点 回収率 {pct(t['rate'])} / sns: 投稿文 {len(items)}件")
