@@ -4,4 +4,6 @@ raw/
 __pycache__/
 model/
 predictions/
-note/post/log/
+log/
+note/post/header.png
+note/post/x_keys.json
