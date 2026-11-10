@@ -6,12 +6,12 @@
 
 ## 0. 使うブラウザ
 
-あきさんの指示で、この手順の操作はすべて **Google Chrome**（deviceId `64d2348c-fd3a-4f88-a601-6a0823aad076`）で行います。Microsoft Edge は使わない。
+あきさんの指示で、この手順の操作はすべて **Google Chrome のプロフィール「ボートレース」**（deviceId `49dbf24e-e750-4968-98c0-e71976919218`）で行います。Microsoft Edge は使わない。
 
 1. 最初に `list_connected_browsers` を呼ぶ。
 2. 一覧に上の Chrome の deviceId があれば、`select_browser` でそれを選ぶ（あきさんが選んだブラウザなので、聞き返さずに選んでよい）。無ければ何もしないで `NG <日付> Chrome がつながっていない` と出力して終わる。
 3. `switch_browser` は使わない（人の操作を待つため）。
-4. Chrome の X には @BoatRace__B と @SIMsokuho の2つのアカウントが入っている。X を操作する前に、必ずログイン中のアカウントが @BoatRace__B か確かめ、違えば左下のアカウントメニューから @BoatRace__B に切り替える。切り替えられなければ X の操作はせず XNG/FNG とする。@SIMsokuho では投稿・フォローを絶対にしない。
+4. このプロフィールの X は @BoatRace__B だけのはず（@SIMsokuho は別プロフィール 58139a7f-… なので選ばない）。X を操作する前に、必ずログイン中のアカウントが @BoatRace__B か確かめ、違えば左下のアカウントメニューから @BoatRace__B に切り替える。切り替えられなければ X の操作はせず XNG/FNG とする。@SIMsokuho では投稿・フォローを絶対にしない。
 
 ## 節約のルール（トークンを使いすぎない）
 
