@@ -36,7 +36,11 @@
   table { border-collapse: collapse; background: #fff; width: 100%; font-size: 13px; }
   th, td { border: 1px solid var(--line); padding: 3px 6px; white-space: nowrap; text-align: center; }
   th { background: #eef2f8; font-weight: normal; position: sticky; top: 0; }
-  tr.buy td { background: #fff3f3; }
+  /* 行の色: 場ごとにごく薄く横全体を塗る。買いのレースは左に赤い線、強調したい行は薄い橙 */
+  tr.jr > td { background: hsl(var(--rh) 65% var(--rl, 97%)); }
+  tr.buy > td:first-child { box-shadow: inset 4px 0 0 var(--red); }
+  tr.hi > td { background: #fff4e0; }
+  tr.hi > td:first-child { box-shadow: inset 4px 0 0 #d26a00; }
   td.l { text-align: left; }
   .ok { color: var(--green); font-weight: bold; }
   .ng { color: #999; }
@@ -86,6 +90,37 @@
   .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 2px 0 4px; }
   .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
   .static [data-run], .static .runbar { display: none; }
+  details > summary { cursor: pointer; color: var(--navy); margin: 8px 0; }
+  .best { background: #eef7ef; border: 1px solid #cfe6d2; border-radius: 6px; padding: 6px 10px; margin: 0 0 8px; }
+  .best b { color: var(--green); }
+  .rate-ok { color: var(--green); font-weight: bold; } .rate-ng { color: var(--red); }
+  /* 買い方ごとの回収率の棒 */
+  .rb { display: grid; grid-template-columns: minmax(130px, 32%) 1fr 58px; gap: 3px 8px; align-items: center; font-size: 12px; max-width: 760px; }
+  .rb .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rb .nm.sub { color: var(--muted); }
+  .rb .br { position: relative; height: 14px; background: #f1f3f7; border-radius: 3px; }
+  .rb .br i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .rb .br .ref { position: absolute; top: -3px; bottom: -3px; border-left: 1.5px dashed #555; }
+  .rb .v { text-align: right; font-variant-numeric: tabular-nums; }
+  /* 月別カレンダー */
+  .cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; max-width: 980px; }
+  .cal .wd { text-align: center; font-size: 12px; color: var(--muted); }
+  .cal .wd.sun { color: var(--red); } .cal .wd.sat { color: #0068b7; }
+  .cal .d { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; min-height: 84px; font-size: 11px; line-height: 1.35; position: relative; }
+  .cal .d.out { background: transparent; border-color: transparent; }
+  .cal .d .n { font-size: 12px; color: var(--muted); }
+  .cal .d .v { font-size: 17px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .cal .d .star { position: absolute; top: 2px; right: 5px; color: #d26a00; font-weight: bold; font-size: 12px; }
+  .cal .d.today { outline: 2px solid var(--navy); outline-offset: -1px; }
+  .cal .d.pred { border-style: dashed; border-color: #8aa2cf; }
+  .calnav { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; }
+  .calnav b { font-size: 16px; min-width: 8em; text-align: center; }
+  .heat td { min-width: 52px; font-variant-numeric: tabular-nums; }
+  .heat td.nodata { color: #bbb; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; vertical-align: middle; margin: 0 3px 0 8px; }
+  .dl { font-size: 11px; } .dl.up { color: var(--green); } .dl.down { color: var(--red); }
+  @media (max-width: 700px) { .cal { gap: 2px; } .cal .d { min-height: 60px; padding: 2px 3px; } .cal .d .v { font-size: 13px; } .cal .d .sub { display: none; }
+    .rb { grid-template-columns: 42% 1fr 50px; } }
   @media (max-width: 700px) { main { padding: 12px 10px 30px; } nav { padding: 0 6px; } nav button { padding: 8px 9px; } header { padding: 8px 12px; } }
 </style>
 </head>
@@ -214,8 +249,8 @@ const joHue = name => { const i = JO.indexOf(name); return i < 0 ? 220 : (i * 5 
 const joColor = (e, name) => {
   const k = joHue(name) / 15;
   e.style.setProperty("--h", joHue(name));
-  e.style.setProperty("--bg", k % 2 ? "82%" : "92%");
-  e.style.setProperty("--bd", k % 2 ? "32%" : "48%");
+  e.style.setProperty("--bg", k % 2 ? "87%" : "93%");
+  e.style.setProperty("--bd", k % 2 ? "38%" : "50%");
   return e;
 };
 const jo = name => joColor(h("span", {className: "jo", textContent: name}), name);
@@ -260,6 +295,11 @@ function table(cols, rows, rowClass, key) {
     }
     body.replaceChildren(...rs.map(r => {
       const tr = h("tr", {className: rowClass ? rowClass(r) : ""});
+      if (r && r["場"] && JO.includes(r["場"])) {
+        tr.classList.add("jr");
+        tr.style.setProperty("--rh", joHue(r["場"]));
+        tr.style.setProperty("--rl", joHue(r["場"]) / 15 % 2 ? "95.5%" : "97.5%");
+      }
       cols.forEach(([, f, cls]) => {
         let v = typeof f === "function" ? f(r) : r[f];
         if (f === "場" && v) v = jo(v);
@@ -275,8 +315,9 @@ function table(cols, rows, rowClass, key) {
 }
 
 // 絞り込み: 場 (色つきのボタン)・本命・本命1着確率・判断・買い目・文字 (選手名など)。画面ごとに条件を覚えておく
-function filterBar(name, rows, onChange) {
-  const f = state.filter[name] = state.filter[name] || {jo: [], lane: "", min: "", hand: "", buy: false, q: ""};
+function filterBar(name, rows, onChange, opt = {}) {
+  const f = state.filter[name] = state.filter[name] || {jo: [], lane: "", min: "", hand: "", buy: !!opt.buy, q: ""};
+  if (opt.noBuy) f.buy = false;
   const has = k => rows.some(r => r[k] != null && r[k] !== "");
   const jos = [...new Set(rows.map(r => r["場"]).filter(Boolean))].sort((a, b) => JO.indexOf(a) - JO.indexOf(b));
   f.jo = f.jo.filter(j => jos.includes(j));
@@ -315,7 +356,7 @@ function filterBar(name, rows, onChange) {
     const hands = [...new Set(rows.map(r => String(r["判断"] || "").split(":")[0]).filter(Boolean))];
     ctl.push(select("hand", [["", "判断: 全部"], ...hands.map(x => [x, x])]));
   }
-  if (rows.length && "単勝買い目" in rows[0]) {
+  if (!opt.noBuy && rows.length && "単勝買い目" in rows[0]) {
     const cb = h("input", {type: "checkbox", checked: f.buy, onchange: () => { f.buy = cb.checked; apply(); }});
     ctl.push(h("label", {}, cb, " 単勝の買い目があるレースだけ"));
   }
@@ -326,53 +367,75 @@ function filterBar(name, rows, onChange) {
 }
 const lane = n => h("span", {className: `lane l${n}`, textContent: n});
 const yen = v => (v > 0 ? "+" : "") + Math.round(v).toLocaleString() + "円";
-// これまでの答え合わせ (log.csv) の買い方ごとの累計
+// これまでの答え合わせ (log.csv) の買い方ごとの累計 (全レース)
 function kaimeTotals(rows) {
   const pats = [...new Set(rows.flatMap(r => Object.keys(r)).filter(c => c.endsWith(" 投資")).map(c => c.slice(0, -3)))];
   if (!pats.length) return null;
-  const sum = pats.map(p => {
+  const ways = pats.map(p => {
     const use = rows.filter(r => r[p + " 投資"] > 0);
-    const cost = use.reduce((a, r) => a + +r[p + " 投資"], 0), got = use.reduce((a, r) => a + +r[p + " 払戻"], 0);
-    return {name: p, days: use.length, cost, got, bal: got - cost, rate: cost ? got / cost : 0};
+    const [kind, ...nm] = p.split(" ");
+    return {kind, name: nm.join(" "), races: use.length, unit: "日", cost: use.reduce((a, r) => a + +r[p + " 投資"], 0),
+      got: use.reduce((a, r) => a + +r[p + " 払戻"], 0)};
   });
-  return h("div", {}, h("h3", {textContent: "3連単・3連複 買い方ごとの累計"}),
-    h("div", {className: "tw"}, table([["券種・買い方", "name", "l"], ["日数", "days"], ["投資", r => r.cost.toLocaleString() + "円"],
-      ["払戻", r => r.got.toLocaleString() + "円"], ["収支", r => h("span", {className: r.bal > 0 ? "ok" : "err", textContent: yen(r.bal)})],
-      ["回収率", r => pct(r.rate)]], sum)));
+  const tan = rows.filter(r => r["単勝期待値買い_点数"] > 0);
+  if (tan.length) ways.unshift({kind: "単勝", name: "単勝の買い目 (期待値1以上)", races: tan.length, unit: "日",
+    tickets: tan.reduce((a, r) => a + +r["単勝期待値買い_点数"], 0), hits: tan.reduce((a, r) => a + (+r["単勝期待値買い_的中"] || 0), 0),
+    cost: tan.reduce((a, r) => a + r["単勝期待値買い_点数"] * 100, 0),
+    got: tan.reduce((a, r) => a + r["単勝期待値買い_点数"] * 100 * (+r["単勝期待値買い_回収率"] || 0), 0)});
+  return waysView(ways, {days: true});
 }
-// 3連単・3連複を買い方ごとに買っていたらの収支。◎○▲△□ は1着確率の高い順 (analysis/kaime.py)
-function kaimeView(rows) {
-  const pats = Object.keys(rows[0]).filter(c => c.endsWith(" 点数")).map(c => c.slice(0, -3));
-  const sel = h("select", {}, [["0", "全レース"], ["0.5", "本命1着確率 50%以上のレースだけ"], ["0.7", "本命1着確率 70%以上のレースだけ"],
-    ["-0.5", "本命1着確率 50%未満のレースだけ"]].map(([v, t]) => h("option", {value: v, textContent: t})));
-  sel.value = state.kaimeMin || "0";
-  const box = h("div");
-  const draw = () => {
-    state.kaimeMin = sel.value;
-    const m = +sel.value;
-    const rs = rows.filter(r => m >= 0 ? r["本命1着確率"] >= m : r["本命1着確率"] < -m);
-    const sum = pats.map(p => {
-      const cost = rs.reduce((a, r) => a + r[p + " 点数"] * 100, 0), got = rs.reduce((a, r) => a + r[p + " 払戻"], 0);
-      return {name: p, cost, got, bal: got - cost, rate: cost ? got / cost : 0, hit: rs.filter(r => r[p + " 的中"] > 0).length};
-    });
-    const best = Math.max(...sum.map(x => x.bal));
-    const sign = v => h("span", {className: v > 0 ? "ok" : "err", textContent: yen(v)});
-    box.replaceChildren(
-      h("div", {className: "tw"}, table([["券種・買い方", "name", "l"], ["レース", () => rs.length], ["的中", r => `${r.hit}R`],
-        ["的中率", r => pct0(rs.length ? r.hit / rs.length : 0)], ["投資", r => r.cost.toLocaleString() + "円"],
-        ["払戻", r => r.got.toLocaleString() + "円"], ["収支", r => sign(r.bal)], ["回収率", r => pct(r.rate)]], sum,
-        r => r.bal === best && best > 0 ? "buy" : "")),
-      h("h4", {textContent: "レースごとの払戻 (100円×点数を買った場合)"}),
-      h("div", {className: "tw"}, table([["場", "場"], ["R", "R"], ["印 (◎○▲△□)", "印"], ["結果", "結果"], ["1〜3着の印", "結果の印"],
-        ["3連単", r => r["3連単配当"] == null ? "" : r["3連単配当"].toLocaleString()],
-        ["3連複", r => r["3連複配当"] == null ? "" : r["3連複配当"].toLocaleString()],
-        ...pats.map(p => [p.replace(/ \(\d+点\)/, ""), r => r[p + " 的中"] > 0 ? h("span", {className: "ok", textContent: r[p + " 払戻"].toLocaleString()}) : h("span", {className: "ng", textContent: "×"})])], rs)));
-  };
-  sel.onchange = draw;
-  draw();
-  return h("div", {className: "card"}, h("h3", {textContent: "3連単・3連複 買い方ごとの収支 (1点100円)"}),
-    h("div", {className: "bar"}, sel), h("p", {className: "note", textContent: "◎○▲△□ = 予想の1着確率が高い順。欠場などで返還になった買い目は100円を払戻に入れています。一番収支の良い買い方を赤く塗っています。"}), box);
+
+// ---------- 買い方 (券種) ごとの成績 ----------
+// 表に出す基本の買い方。BOX・流し・軸・フォーメーションは折りたたむ
+const wayName = w => `${w.kind} ${w.name}`.replace("単勝 単勝の買い目", "単勝の買い目");
+const MAIN_WAYS = ["単勝の買い目 (期待値1以上)", "予想着順 1点", "確率の上位5点", "◎○▲ 1点"];
+const WAY_LABEL = {"単勝の買い目 (期待値1以上)": "期待値1以上の艇", "予想着順 1点": "予想着順 1点", "確率の上位5点": "確率の上位5点", "◎○▲ 1点": "◎○▲ 1点"};
+const money = v => v == null ? "" : Math.round(v).toLocaleString() + "円";
+const rateCell = v => v == null || isNaN(v) ? "" : h("span", {className: v >= 1 ? "rate-ok" : v < 0.75 ? "rate-ng" : "", textContent: pct(v)});
+const signYen = v => v == null ? "" : h("span", {className: v > 0 ? "ok" : "err", textContent: yen(v)});
+const KIND_COLOR = {"単勝": "#d26a00", "3連単": "#3b6fd4", "3連複": "#1f9a8a"};
+// 回収率の横棒 (破線 = 100%、緑 = 黒字)
+function rateBars(ways, best) {
+  const top = Math.min(Math.max(1.25, ...ways.map(w => w.rate)), 3);
+  const box = h("div", {className: "rb"});
+  ways.forEach(w => {
+    const main = MAIN_WAYS.includes(w.name);
+    const fill = w.rate >= 1 ? "#2e9d55" : w.rate >= 0.75 ? (KIND_COLOR[w.kind] || "#8fa8d6") : "#e3a0a0";
+    box.append(h("div", {className: "nm" + (main ? "" : " sub"), title: wayName(w)}, (w === best ? "★ " : "") + wayName(w)),
+      h("div", {className: "br"}, h("i", {style: `width:${Math.min(w.rate / top, 1) * 100}%;background:${fill};opacity:${main ? 1 : .55}`}),
+        h("span", {className: "ref", style: `left:${100 / top}%`})),
+      h("div", {className: "v"}, rateCell(w.rate)));
+  });
+  return box;
 }
+// ways: [{kind, name, races, tickets, hits, cost, got, grade?, note?}]
+function waysView(ways, opt = {}) {
+  ways = ways.filter(w => w.cost > 0).map(w => ({...w, bal: w.got - w.cost, rate: w.got / w.cost,
+    hr: w.hits != null && w.races ? w.hits / w.races : null}));
+  if (!ways.length) return h("p", {className: "note", textContent: "この条件では買い目がありません。"});
+  const best = ways.reduce((a, b) => b.rate > a.rate ? b : a);
+  const cols = [...(opt.grade ? [["評価", r => grade(r.grade)]] : []), ["券種", "kind"], ["買い方", r => WAY_LABEL[r.name] || r.name, "l"],
+    [opt.days ? "日数" : "レース", "races"], ...(opt.days ? [] : [["的中", r => r.hits == null ? "" : `${r.hits}R`], ["的中率", r => pct0(r.hr)]]),
+    ["投資", r => money(r.cost)], ["払戻", r => money(r.got)], ["収支", r => signYen(r.bal)], ["回収率", r => rateCell(r.rate)],
+    ...(opt.grade ? [["備考", "note", "memo"]] : [])];
+  const main = ways.filter(w => MAIN_WAYS.includes(w.name)), rest = ways.filter(w => !MAIN_WAYS.includes(w.name));
+  const mark = r => r === best ? "hi" : "";
+  const sorted = ways.slice().sort((a, b) => b.rate - a.rate);
+  return h("div", {},
+    h("p", {className: "best"}, "回収率がいちばん良かった買い方: ", h("b", {textContent: wayName(best)}),
+      ` (回収率 ${pct(best.rate)}、収支 ${yen(best.bal)})`),
+    table(cols, main.length ? main : ways, mark, "ways" + (opt.days ? "d" : "") + (opt.grade ? "g" : "")),
+    rest.length && main.length ? h("details", {}, h("summary", {textContent: `BOX・流し・軸・フォーメーションの買い方 (${rest.length}通り)`}),
+      table(cols, rest, mark, "ways" + (opt.days ? "d" : "") + (opt.grade ? "g" : ""))) : "",
+    h("h4", {textContent: "買い方ごとの回収率 (高い順。破線 = 100%、緑 = 黒字、薄い棒 = BOX・流しなど)"}), rateBars(sorted, best));
+}
+// 成績 (seiseki.json) の行 → ways
+const waysOfRows = rows => rows.filter(r => r["区分"] !== "当たり方" && r["投資"] > 0 && !String(r["項目"]).startsWith("直前"))
+  .map(r => ({kind: r["区分"], name: r["項目"], races: r["レース"], tickets: r["点数"], hits: r["的中"], cost: r["投資"], got: r["払戻"],
+    grade: r["評価"], note: r["備考"]}));
+// 単勝の買い目の予想オッズ (前日までのデータから見積もったオッズ)
+const buyOdds = r => !r || !r["単勝買い目"] ? "" : String(r["単勝買い目"]).split(" ")
+  .map(l => r[`${l}号艇の予想オッズ`]).filter(v => v != null && v !== "").map(v => (+v).toFixed(1)).join(" / ");
 const raceLink = (r, date) => {
   const [, jcd, rno] = String(r.race_id).split("-");
   const hd = (date || r["日付"] || "").replaceAll("-", "");
@@ -384,7 +447,7 @@ const PRED_COLS = date => [
   ["本命1着確率", r => pct0(r["本命1着確率"])], ["予想着順", "予想着順"], ["3連単上位5点", "3連単上位5点", "l"],
   ["判断", "判断", "l"],
   ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""],
-  ["期待値", "買い目の期待値"],
+  ["予想オッズ", buyOdds], ["期待値", "買い目の期待値"],
   ["1", r => pct0(r["1号艇"])], ["2", r => pct0(r["2号艇"])], ["3", r => pct0(r["3号艇"])],
   ["4", r => pct0(r["4号艇"])], ["5", r => pct0(r["5号艇"])], ["6", r => pct0(r["6号艇"])],
   ["公式", r => raceLink(r, date)],
@@ -392,53 +455,40 @@ const PRED_COLS = date => [
 const buyRow = r => r["単勝買い目"] ? "buy" : "";
 
 // ---------- グラフ (年ごとの実績) ----------
-const SERIES = ["#3b6fd4", "#d26a00", "#1f9a8a"];
-function lineChart(xs, series, {max, refs = [], fmt = pct0}) {
-  const W = 560, H = 230, L = 40, R = 84, T = 12, B = 26, ns = "http://www.w3.org/2000/svg";
-  const sv = (tag, a = {}) => { const e = document.createElementNS(ns, tag); Object.entries(a).forEach(([k, v]) => e.setAttribute(k, v)); return e; };
-  const x = i => L + (xs.length < 2 ? 0 : i * (W - L - R) / (xs.length - 1));
-  const y = v => T + (H - T - B) * (1 - v / max);
+// 基準 (回収率は100%、的中率は通算) から上下に伸びる棒。縦軸はデータの幅に合わせて広げ、年ごとの違いを見やすくする
+function divBars(xs, vals, {ref, refLabel, fmt = pct}) {
+  const W = 560, H = 230, L = 46, R = 12, T = 16, B = 24, ns = "http://www.w3.org/2000/svg";
+  const sv = (tag, a = {}, text) => { const e = document.createElementNS(ns, tag); Object.entries(a).forEach(([k, v]) => e.setAttribute(k, v)); if (text != null) e.textContent = text; return e; };
+  const vs = vals.filter(v => v != null);
+  let lo = Math.min(ref, ...vs), hi = Math.max(ref, ...vs);
+  const pad = (hi - lo) * 0.22 || 0.01; lo -= pad; hi += pad;
+  const y = v => T + (H - T - B) * (hi - v) / (hi - lo);
+  const band = (W - L - R) / xs.length, bw = Math.min(band * 0.62, 40);
   const svg = sv("svg", {viewBox: `0 0 ${W} ${H}`, role: "img"});
-  const step = max <= 0.5 ? 0.1 : max <= 1 ? 0.2 : 0.25;
-  for (let v = 0; v <= max + 1e-9; v += step) {
-    svg.append(sv("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#e6e9ef"}));
-    const t = sv("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#667"}); t.textContent = fmt(v); svg.append(t);
+  const step = [0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2, 0.25, 0.5, 1].find(s => (hi - lo) / s <= 5) || 1;
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) {
+    svg.append(sv("line", {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "#eceff4"}));
+    svg.append(sv("text", {x: L - 6, y: y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "#778"}, fmt(v).replace(/\.0%$/, "%")));
   }
-  refs.forEach(r => {
-    svg.append(sv("line", {x1: L, x2: W - R, y1: y(r.v), y2: y(r.v), stroke: "#888", "stroke-dasharray": "4 3"}));
-    const t = sv("text", {x: W - R + 4, y: y(r.v) + 4, "font-size": 11, fill: "#555"}); t.textContent = r.label; svg.append(t);
+  vals.forEach((v, i) => {
+    const cx = L + band * (i + 0.5);
+    svg.append(sv("text", {x: cx, y: H - 7, "text-anchor": "middle", "font-size": 11, fill: "#667"}, xs[i]));
+    if (v == null) return;
+    const up = v >= ref, y0 = y(ref), y1 = y(v);
+    const g = sv("g");
+    g.append(sv("title", {}, `${xs[i]}: ${fmt(v)}${i && vals[i - 1] != null ? ` (前年比 ${(v - vals[i - 1] >= 0 ? "+" : "") + ((v - vals[i - 1]) * 100).toFixed(1)}pt)` : ""}`));
+    g.append(sv("rect", {x: cx - bw / 2, y: Math.min(y0, y1), width: bw, height: Math.max(Math.abs(y1 - y0), 1.5), rx: 2,
+      fill: up ? "#2e9d55" : "#d9534f", opacity: .85}));
+    g.append(sv("text", {x: cx, y: up ? y1 - 4 : y1 + 12, "text-anchor": "middle", "font-size": 10, fill: up ? "#1d6b39" : "#a33"}, fmt(v)));
+    svg.append(g);
   });
-  xs.forEach((v, i) => { if (xs.length <= 12 || i % 2 === 0) {
-    const t = sv("text", {x: x(i), y: H - 8, "text-anchor": "middle", "font-size": 11, fill: "#667"}); t.textContent = v; svg.append(t); } });
-  const guide = sv("line", {y1: T, y2: H - B, stroke: "#999", visibility: "hidden"});
-  svg.append(guide);
-  series.forEach((s, k) => {
-    const pts = s.values.map((v, i) => v == null ? null : [x(i), y(v)]);
-    svg.append(sv("polyline", {points: pts.filter(Boolean).map(p => p.join(",")).join(" "), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round"}));
-    pts.forEach(p => p && svg.append(sv("circle", {cx: p[0], cy: p[1], r: 4, fill: s.color, stroke: "#fff", "stroke-width": 2})));
-    const last = pts.filter(Boolean).pop();
-    if (last && refs.every(r => Math.abs(y(r.v) - last[1]) > 10)) {
-      const t = sv("text", {x: last[0] + 8, y: last[1] + 4, "font-size": 11, fill: "#333"}); t.textContent = s.short || s.name; svg.append(t);
-    }
-  });
-  const tip = h("div", {className: "tip"});
-  const box = h("div", {className: "chart"}, svg, tip);
-  xs.forEach((v, i) => {
-    const half = (W - L - R) / Math.max(xs.length - 1, 1) / 2;
-    const hit = sv("rect", {x: x(i) - half, y: 0, width: half * 2, height: H, fill: "transparent"});
-    const on = () => {
-      guide.setAttribute("x1", x(i)); guide.setAttribute("x2", x(i)); guide.setAttribute("visibility", "visible");
-      tip.replaceChildren(h("b", {textContent: v}), ...series.map(s => h("div", {}, h("span", {style: `color:${s.color}`, textContent: "● "}), `${s.name}: ${s.values[i] == null ? "-" : pct(s.values[i])}`)));
-      tip.style.display = "block";
-      const px = x(i) / W * box.clientWidth;
-      tip.style.left = Math.min(px + 10, box.clientWidth - tip.offsetWidth - 4) + "px"; tip.style.top = "6px";
-    };
-    hit.addEventListener("pointerenter", on); hit.addEventListener("pointerdown", on);
-    hit.addEventListener("pointerleave", () => { tip.style.display = "none"; guide.setAttribute("visibility", "hidden"); });
-    svg.append(hit);
-  });
-  return h("div", {}, h("div", {className: "legend"}, series.map(s => h("span", {}, h("i", {style: `background:${s.color}`}), s.name))), box);
+  svg.append(sv("line", {x1: L, x2: W - R, y1: y(ref), y2: y(ref), stroke: "#555", "stroke-dasharray": "4 3"}));
+  return h("div", {className: "chart"}, svg);
 }
+// 前年からの増減 (pt)
+const delta = (v, prev) => v == null || prev == null ? "" :
+  h("span", {className: "dl " + (v - prev >= 0.0005 ? "up" : v - prev <= -0.0005 ? "down" : ""),
+    textContent: ` ${v - prev >= 0 ? "▲" : "▼"}${Math.abs((v - prev) * 100).toFixed(1)}`});
 
 // 成績 (seiseki.json) の期間の行から、年ごとの表と同じ形の1行を作る
 function periodRow(rows, label) {
@@ -521,6 +571,62 @@ const MATOME_COLS = [["日付", "日付"], ["締切", "締切"], ["場", "場"],
   ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""], ["期待値", "買い目の期待値"],
   ["3連単上位5点", "3連単上位5点", "l"], ["5点の的中確率", r => pct0(r["3連単上位5点の的中確率"])], ["公式", r => raceLink(r)]];
 
+const truthy = v => v === true || v === "True" || v === "true" || v === 1;
+const resultLink = (r, date) => {
+  const [, jcd, rno] = String(r.race_id).split("-");
+  return h("a", {href: `https://www.boatrace.jp/owpc/pc/race/raceresult?rno=${+rno}&jcd=${jcd}&hd=${date.replaceAll("-", "")}`, target: "_blank", textContent: "結果"});
+};
+const CHECK_SCOPE = [["buy", "買いのレース (単勝の買い目があったレース)"], ["all", "全レース"], ["0.7", "本命1着確率 70%以上のレース"],
+  ["0.5", "本命1着確率 50%以上のレース"], ["-0.5", "本命1着確率 50%未満のレース"]];
+// カレンダーの色 (回収率は100%を境に緑と赤、的中率はその元の平均との差)
+const heatRate = v => v == null ? "#fff" : v >= 1.2 ? "#bfe5c6" : v >= 1 ? "#dcf1df" : v >= 0.9 ? "#f6f3dc" : v >= 0.75 ? "#fbe9da" : "#f8d6d6";
+const heatAround = c => v => v == null ? "#fff" : v >= c + 0.05 ? "#bfe5c6" : v >= c + 0.015 ? "#dcf1df" : v > c - 0.015 ? "#f6f3dc" : v > c - 0.05 ? "#fbe9da" : "#f8d6d6";
+const CAL_METRIC = {
+  tan: {name: "単勝の買い目の回収率", f: r => r["単勝点数"] ? r["単勝回収率"] : null, color: heatRate, hi: 1.3, mid: 0.95, lo: 0.6,
+    legend: ["120%以上", "90〜100%", "75%未満"], agg: rs => ratio(rs, r => r["単勝点数"] * 100 * (r["単勝回収率"] || 0), r => r["単勝点数"] * 100)},
+  tanhit: {name: "単勝の的中率 (的中/点数)", f: r => r["単勝点数"] ? r["単勝的中"] / r["単勝点数"] : null, color: heatAround(0.36), hi: 0.45, mid: 0.36, lo: 0.25,
+    legend: ["40%以上", "35%前後", "30%未満"], agg: rs => ratio(rs, r => r["単勝的中"] || 0, r => r["単勝点数"] || 0)},
+  hon: {name: "本命の1着率", f: r => r["本命1着率"], color: heatAround(0.57), hi: 0.65, mid: 0.57, lo: 0.5,
+    legend: ["62%以上", "57%前後", "52%未満"], agg: rs => ratio(rs, r => (r["本命1着率"] || 0) * r["レース"], r => r["レース"] || 0)},
+  t5: {name: "3連単上位5点の回収率", f: r => r["3連単上位5点回収率"], color: heatRate, hi: 1.3, mid: 0.95, lo: 0.6,
+    legend: ["120%以上", "90〜100%", "75%未満"], agg: rs => ratio(rs, r => (r["3連単上位5点回収率"] || 0) * r["レース"], r => r["レース"] || 0)},
+};
+function ratio(rs, num, den) { const d = rs.reduce((a, r) => a + (+den(r) || 0), 0); return d ? rs.reduce((a, r) => a + (+num(r) || 0), 0) / d : null; }
+// 曜日ごとのまとめ (狙い目の曜日)
+function weekdayTable(days, M) {
+  if (days.length < 7) return "";
+  const W = ["日", "月", "火", "水", "木", "金", "土"];
+  const rows = W.map((w, k) => {
+    const rs = days.filter(r => new Date(r["日付"] + "T00:00:00Z").getUTCDay() === k);
+    const pts = rs.reduce((a, r) => a + (r["単勝点数"] || 0), 0);
+    return {w, n: rs.length, pts, v: rs.length ? M.agg(rs) : null, plus: rs.filter(r => (r["単勝回収率"] || 0) >= 1).length,
+      bal: rs.reduce((a, r) => a + (r["単勝点数"] || 0) * 100 * ((r["単勝回収率"] || 0) - 1), 0)};
+  });
+  const best = rows.filter(r => r.v != null).reduce((a, b) => !a || b.v > a.v ? b : a, null);
+  return h("div", {}, h("h3", {textContent: "曜日ごと"}),
+    table([["曜日", "w"], ["日数", "n"], [M.name, r => h("span", {style: `background:${M.color(r.v)};padding:0 6px;border-radius:3px`, textContent: pct(r.v)})],
+      ["単勝 点数", "pts"], ["単勝の収支", r => signYen(r.bal)], ["単勝が黒字の日", r => r.n ? `${r.plus} / ${r.n}日` : ""]], rows, r => r === best ? "hi" : "", "weekday"),
+    h("p", {className: "note", textContent: `${M.name}が一番良い曜日を橙にしています。日数が少ないうちは偶然の差が大きいので参考程度に。`}));
+}
+// 年×月の表 (狙い目の月)
+function monthHeat(months, M, onPick) {
+  const ys = [...new Set(months.map(r => r["月"].slice(0, 4)))].sort().reverse();
+  if (ys.length < 1 || months.length < 3) return "";
+  const mm = Object.fromEntries(months.map(r => [r["月"], r]));
+  const cell = rs => { const v = rs.length ? M.agg(rs) : null;
+    return h("td", {className: v == null ? "nodata" : "", style: `background:${M.color(v)}`, textContent: v == null ? "-" : pct0(v)}); };
+  const trs = ys.map(y => h("tr", {}, h("td", {textContent: y + "年"}),
+    ...Array.from({length: 12}, (_, k) => { const key = `${y}-${String(k + 1).padStart(2, "0")}`, r = mm[key];
+      const td = cell(r ? [r] : []); if (r) { td.style.cursor = "pointer"; td.title = `${key}: ${M.name} ${pct(M.f(r))}`; td.onclick = () => onPick(key); } return td; }),
+    cell(months.filter(r => r["月"].startsWith(y)))));
+  const avgRow = h("tr", {}, h("td", {}, h("b", {textContent: "平均"})),
+    ...Array.from({length: 12}, (_, k) => cell(months.filter(r => +r["月"].slice(5) === k + 1))), cell(months));
+  return h("div", {}, h("h3", {textContent: `月ごとの${M.name}`}),
+    h("div", {className: "tw"}, h("table", {className: "heat"}, h("thead", {}, h("tr", {}, h("th", {textContent: "年"}),
+      ...Array.from({length: 12}, (_, k) => h("th", {textContent: `${k + 1}月`})), h("th", {textContent: "年間"}))), h("tbody", {}, ...trs, avgRow))),
+    h("p", {className: "note", textContent: "下の「平均」の行で、どの月が良いか (狙い目の月) を見られます。日ごとの成績がある月は押すとカレンダーをその月にします。"}));
+}
+
 // ---------- 各画面 ----------
 const PAGES = {
   matome: {title: "今週のまとめ", async render(el) {
@@ -592,10 +698,11 @@ const PAGES = {
         const nbuy = j.rows.filter(r => r["単勝買い目"]).length;
         const tb = h("div");
         out.replaceChildren(
-          h("p", {className: "note"}, `${j.rows.length}レース。単勝の買い目 (期待値1以上) があるのは ${nbuy}レース。` +
-            (STATIC ? "「直前情報」で公式サイトのそのレースを開きます。" : "「直前情報」を開くと、展示タイムと実際のオッズでの予想がページの右下に出ます。") +
-            "表の見出しを押すと並べ替えます。"),
-          filterBar("today", j.rows, rows => tb.replaceChildren(table(PRED_COLS(d.value), rows, buyRow))), tb);
+          h("p", {className: "note"}, `${j.rows.length}レース。単勝の買い目 (期待値1以上) があるのは ${nbuy}レースで、最初はそのレースだけを出しています (「単勝の買い目があるレースだけ」を外すと全部)。` +
+            "予想オッズは前日までのデータから見積もったオッズです。実際のオッズが予想オッズより低いと期待値が1を割るので、" +
+            (STATIC ? "「直前情報」で公式サイトのオッズを確かめてから買ってください。" : "「直前情報」を開いて、ページの右下に出る実際のオッズでの予想を確かめてください。") +
+            "行の色は場ごと、左の赤い線は買いのレース。表の見出しを押すと並べ替えます。"),
+          filterBar("today", j.rows, rows => tb.replaceChildren(table(PRED_COLS(d.value), rows, buyRow)), {buy: true}), tb);
       } catch (e) {
         out.replaceChildren(h("p", {}, e.message, hint("。「予想する」を押してください (番組表は前日〜当日朝に公開されます)。")));
       }
@@ -606,65 +713,188 @@ const PAGES = {
     load();
   }},
 
-  week: {title: "1週間の予想", async render(el) {
-    const d = h("input", {type: "date", value: today()});
+  calendar: {title: "カレンダー", async render(el) {
+    const src = h("select", {}, [["", "実際に予想した分"], ["backtest", "過去10年の検証 (予想し直し)"]].map(([v, t]) => h("option", {value: v, textContent: t})));
+    src.value = state.calSrc || "";
+    const met = h("select", {}, Object.entries(CAL_METRIC).map(([v, m]) => h("option", {value: v, textContent: m.name})));
+    met.value = state.calMetric || "tan";
     const out = h("div");
-    const load = async () => {
-      try {
-        const j = await api(`/api/week?date=${d.value}`);
-        const days = [...new Set(j.rows.map(r => r["日付"]))];
-        const tb = h("div");
-        out.replaceChildren(h("p", {className: "note"},
-          `${days.length}日分 ${j.rows.length}レース (${days.join("、")})。出走表は前日〜当日朝に公開されるので、ふつう予想できるのは今日と明日までです。残りの日は毎朝の自動実行でその日の朝に予想されます。`),
-          filterBar("week", j.rows, rs => tb.replaceChildren(...days.flatMap(day => {
-            const rows = rs.filter(r => r["日付"] === day);
-            return rows.length ? [h("h3", {textContent: `${day}  (${rows.length}レース、単勝の買い目 ${rows.filter(r => r["単勝買い目"]).length})`}),
-              table(PRED_COLS(day), rows, buyRow)] : [];
-          }))), tb);
-      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「1週間分を予想」を押してください。"))); }
+    el.append(h("div", {className: "bar"}, src, met), out);
+    let s = null, preds = {};
+    const t = today();
+    const draw = () => {
+      state.calMetric = met.value;
+      const M = CAL_METRIC[met.value];
+      const days = (s && s.days) || [];
+      const dm = Object.fromEntries(days.map(r => [r["日付"], r]));
+      const months = [...new Set([...days.map(r => r["日付"].slice(0, 7)), ...Object.keys(preds).map(d => d.slice(0, 7))])].sort();
+      if (!months.length) { out.replaceChildren(h("p", {}, "まだ成績がありません。")); return; }
+      let ym = state.calMonth && months.includes(state.calMonth) ? state.calMonth : (months.includes(t.slice(0, 7)) ? t.slice(0, 7) : months[months.length - 1]);
+      state.calMonth = ym;
+      const i = months.indexOf(ym);
+      const go = k => { state.calMonth = months[i + k]; draw(); };
+      const [Y, Mo] = ym.split("-").map(Number);
+      // 過去の日の平均 (予想の日の「狙い目」の目安)
+      const avgBuy = days.length ? days.reduce((a, r) => a + (r["単勝点数"] || 0), 0) / days.length : null;
+      const grid = h("div", {className: "cal"}, ["日", "月", "火", "水", "木", "金", "土"].map((w, k) => h("div", {className: "wd" + (k === 0 ? " sun" : k === 6 ? " sat" : ""), textContent: w})));
+      const first = new Date(Date.UTC(Y, Mo - 1, 1)).getUTCDay(), nd = new Date(Date.UTC(Y, Mo, 0)).getUTCDate();
+      for (let k = 0; k < first; k++) grid.append(h("div", {className: "d out"}));
+      for (let dd = 1; dd <= nd; dd++) {
+        const date = `${ym}-${String(dd).padStart(2, "0")}`;
+        const r = dm[date], p = preds[date];
+        const cell = h("div", {className: "d" + (date === t ? " today" : "")}, h("div", {className: "n", textContent: dd}));
+        if (r) {
+          const v = M.f(r);
+          cell.style.background = M.color(v);
+          const bal = r["単勝点数"] ? r["単勝点数"] * 100 * ((r["単勝回収率"] || 0) - 1) : null;
+          cell.append(h("div", {className: "v", textContent: v == null ? "-" : pct0(v)}),
+            h("div", {className: "sub"}, r["単勝点数"] ? `単勝 ${r["単勝点数"]}点 的中${r["単勝的中"]}` : "単勝 買い目なし"),
+            bal != null ? h("div", {className: "sub " + (bal > 0 ? "ok" : "err"), textContent: yen(bal)}) : "");
+          if ((r["単勝回収率"] || 0) >= 1.2) cell.append(h("span", {className: "star", title: "単勝の回収率120%以上 (狙い目だった日)", textContent: "★"}));
+          cell.title = `${date}  単勝 回収率 ${pct(r["単勝回収率"])} / 的中率 ${pct(r["単勝点数"] ? r["単勝的中"] / r["単勝点数"] : null)} / 本命1着率 ${pct(r["本命1着率"])} / 3連単5点 回収率 ${pct(r["3連単上位5点回収率"])}`;
+        } else if (p) {
+          cell.classList.add("pred");
+          cell.append(h("div", {className: "v", style: "color:#3b6fd4", textContent: `${p.buy}点`}),
+            h("div", {className: "sub"}, `予想 ${p.n}R`), p.ev ? h("div", {className: "sub", textContent: `平均期待値 ${p.ev.toFixed(2)}`}) : "");
+          if (avgBuy != null && p.buy >= avgBuy) cell.append(h("span", {className: "star", title: `単勝の買い目が多い日 (これまでの平均 ${avgBuy.toFixed(0)}点以上)`, textContent: "狙い目"}));
+          cell.style.cursor = "pointer";
+          cell.onclick = () => { state.date = date; show("today"); };
+          cell.title = `${date} の予想: 単勝の買い目 ${p.buy}点 (押すと今日の予想の画面へ)`;
+        }
+        grid.append(cell);
+      }
+      // その月のまとめ
+      const md = days.filter(r => r["日付"].startsWith(ym));
+      const pts = md.reduce((a, r) => a + (r["単勝点数"] || 0), 0), hit = md.reduce((a, r) => a + (r["単勝的中"] || 0), 0);
+      const got = md.reduce((a, r) => a + (r["単勝点数"] || 0) * 100 * (r["単勝回収率"] || 0), 0);
+      const plus = md.filter(r => (r["単勝回収率"] || 0) >= 1).length;
+      out.replaceChildren(
+        h("div", {className: "calnav"}, h("button", {className: "btn sub", textContent: "‹ 前の月", disabled: i <= 0, onclick: () => go(-1)}),
+          h("b", {textContent: `${Y}年${Mo}月`}), h("button", {className: "btn sub", textContent: "次の月 ›", disabled: i >= months.length - 1, onclick: () => go(1)})),
+        md.length ? h("div", {className: "kpis", style: "margin-bottom:8px"},
+          kpi("単勝の買い目の回収率", pct(pts ? got / (pts * 100) : null), "real"), kpi("単勝の的中率 (的中/点数)", pct(pts ? hit / pts : null), "real"),
+          kpi("単勝の収支 (1点100円)", pts ? yen(got - pts * 100) : "-", "real"), kpi("黒字の日", `${plus} / ${md.length}日`, "real"),
+          kpi("本命の1着率", pct(avg(md, "本命1着率")), "real")) : "",
+        grid,
+        h("p", {className: "note"}, h("span", {className: "swatch", style: `background:${M.color(M.hi)}`}), M.legend[0],
+          h("span", {className: "swatch", style: `background:${M.color(M.mid)}`}), M.legend[1],
+          h("span", {className: "swatch", style: `background:${M.color(M.lo)}`}), M.legend[2],
+          "。★ = 単勝の回収率120%以上の日。点線の日は予想だけ (まだ答え合わせ前) で、数字は単勝の買い目の点数。これまでの平均より多い日に「狙い目」と出します。押すとその日の予想を開きます。"),
+        weekdayTable(days, M),
+        s && s.months ? monthHeat(s.months, M, ym => { if (months.includes(ym)) { state.calMonth = ym; draw(); } }) : "");
     };
-    d.onchange = load;
-    el.append(h("div", {className: "bar"}, d, h("span", {textContent: "から7日分"}),
-      h("button", {className: "btn", textContent: "1週間分を予想", dataset: {run: 1}, onclick: () => run("week", d.value)})), out);
+    const load = async () => {
+      state.calSrc = src.value;
+      out.replaceChildren(h("div", {className: "note", textContent: "読み込み中…"}));
+      try { s = await api(`/api/seiseki?src=${src.value}`); } catch (e) { s = null; }
+      preds = {};
+      if (!src.value) {  // 答え合わせ前の予想 (今日・明日) の買い目の数
+        let ds = [t, addDays(t, 1)];
+        try { const st = await api("/api/status"); if (st.dates) ds = st.dates.predictions.filter(d => d >= addDays(t, -1)); } catch {}
+        const done = new Set(((s && s.days) || []).map(r => r["日付"]));
+        await Promise.all(ds.filter(d => !done.has(d)).map(async d => {
+          try {
+            const rows = (await api(`/api/predictions?date=${d}`)).rows;
+            const evs = rows.flatMap(r => String(r["買い目の期待値"] || "").split(" ").filter(Boolean).map(Number));
+            preds[d] = {n: rows.length, buy: rows.reduce((a, r) => a + (r["単勝買い目"] ? String(r["単勝買い目"]).split(" ").length : 0), 0),
+              ev: evs.length ? evs.reduce((a, b) => a + b, 0) / evs.length : null};
+          } catch {}
+        }));
+      }
+      if (!s && !Object.keys(preds).length) { out.replaceChildren(h("p", {}, "まだ成績がありません", hint("。予想して答え合わせをすると、ここにたまっていきます。"))); return; }
+      draw();
+    };
+    src.onchange = load;
+    met.onchange = draw;
     load();
   }},
 
   check: {title: "答え合わせ", async render(el) {
     const d = h("input", {type: "date", value: state.checkDate || addDays(today(), -1)});
+    const scope = h("select", {}, CHECK_SCOPE.map(([v, t]) => h("option", {value: v, textContent: t})));
+    scope.value = state.checkScope || "buy";
     const out = h("div"), tot = h("div");
+    let j = null, pred = {};
+    const draw = () => {
+      state.checkScope = scope.value;
+      const v = scope.value, m = +v;
+      const inScope = r => !r ? false : v === "buy" ? r["単勝点数"] > 0 : v === "all" ? true : m >= 0 ? r["本命1着確率"] >= m : r["本命1着確率"] < -m;
+      const kmap = Object.fromEntries((j.kaime || []).map(k => [k.race_id, k]));
+      const all = j.rows.map(r => {
+        const p = pred[r.race_id] || {}, k = kmap[r.race_id] || {};
+        return {...r, "締切": p["締切"], "本命選手": p["本命選手"], "単勝買い目": p["単勝買い目"] || (r["単勝点数"] > 0 ? "?" : null),
+          "予想オッズ": buyOdds(p), "期待値": p["買い目の期待値"], "3連複配当": k["3連複配当"],
+          "単勝配当": r["単勝配当"] ?? (r["単勝的中"] > 0 && r["単勝点数"] === 1 ? r["単勝払戻"] : null)};
+      });
+      const rs = all.filter(inScope);
+      const ids = new Set(rs.map(r => r.race_id));
+      const ks = (j.kaime || []).filter(k => ids.has(k.race_id));
+      // 買い方 (券種) ごと
+      const ways = [];
+      const tb = rs.filter(r => r["単勝点数"] > 0);
+      if (tb.length) ways.push({kind: "単勝", name: "単勝の買い目 (期待値1以上)", races: tb.length, tickets: tb.reduce((a, r) => a + r["単勝点数"], 0),
+        hits: tb.filter(r => r["単勝的中"] > 0).length, cost: tb.reduce((a, r) => a + r["単勝点数"] * 100, 0), got: tb.reduce((a, r) => a + (r["単勝払戻"] || 0), 0)});
+      if (ks.length) {
+        Object.keys(ks[0]).filter(c => c.endsWith(" 点数")).map(c => c.slice(0, -3)).forEach(p => {
+          const [kind, ...nm] = p.split(" ");
+          ways.push({kind, name: nm.join(" "), races: ks.length, hits: ks.filter(k => k[p + " 的中"] > 0).length,
+            cost: ks.reduce((a, k) => a + k[p + " 点数"] * 100, 0), got: ks.reduce((a, k) => a + (k[p + " 払戻"] || 0), 0)});
+        });
+      } else if (rs.length) {  // _kaime.csv が無い日は3連単の2つだけ
+        const h1 = rs.filter(r => truthy(r["予想着順的中"])), h5 = rs.filter(r => truthy(r["上位5点的中"]));
+        ways.push({kind: "3連単", name: "予想着順 1点", races: rs.length, hits: h1.length, cost: rs.length * 100, got: h1.reduce((a, r) => a + (r["三連単配当"] || 0), 0)},
+          {kind: "3連単", name: "確率の上位5点", races: rs.length, hits: h5.length, cost: rs.length * 500, got: h5.reduce((a, r) => a + (r["三連単配当"] || 0), 0)});
+      }
+      const tw = ways[0] && ways[0].kind === "単勝" ? ways[0] : null;
+      const tableBox = h("div");
+      const pats = ks.length ? Object.keys(ks[0]).filter(c => c.endsWith(" 点数")).map(c => c.slice(0, -3)) : [];
+      out.replaceChildren(
+        h("div", {className: "kpis"},
+          kpi(CHECK_SCOPE.find(x => x[0] === v)[1].replace(/ \(.*/, ""), `${rs.length}R`),
+          kpi("単勝の買い目の回収率", tw ? pct(tw.got / tw.cost) : "-", "real"),
+          kpi("単勝の的中", tw ? `${tw.hits} / ${tw.races}R (${pct0(tw.hits / tw.races)})` : "-", "real"),
+          kpi("単勝の収支 (1点100円)", tw ? yen(tw.got - tw.cost) : "-", "real"),
+          kpi("本命の1着率", pct(rs.length ? rs.filter(r => truthy(r["本命1着"])).length / rs.length : null))),
+        h("h3", {textContent: "買い方ごとの成績 (1点100円)"}),
+        waysView(ways),
+        h("p", {className: "note", textContent: "◎○▲△□ = 予想の1着確率が高い順。欠場などで返還になった買い目は100円を払戻に入れています。" +
+          (ks.length ? "" : "この日は3連複・BOXなどの記録がありません (答え合わせをやり直すと出ます)。")}),
+        h("h3", {textContent: "レースごと"}),
+        filterBar("check", rs, x => tableBox.replaceChildren(table([["締切", "締切"], ["場", "場"], ["R", "R"],
+          ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""],
+          ["予想オッズ", "予想オッズ"],
+          ["単勝の結果", r => !(r["単勝点数"] > 0) ? "" : r["単勝的中"] > 0 ? h("span", {className: "ok", textContent: `○ ${money(r["単勝払戻"])}`}) : h("span", {className: "ng", textContent: "×"})],
+          ["結果", "結果"], ["単勝配当", r => money(r["単勝配当"])], ["3連単配当", r => money(r["三連単配当"])], ["3連複配当", r => money(r["3連複配当"])],
+          ["本命", r => lane(r["本命"])], ["本命選手", "本命選手", "l"], ["本命1着確率", r => pct0(r["本命1着確率"])], ["予想着順", "予想着順"],
+          ["本命1着", r => truthy(r["本命1着"]) ? h("span", {className: "ok", textContent: "○"}) : h("span", {className: "ng", textContent: "×"})],
+          ["本命の着", "本命の着"], ["決まり手", "決まり手"], ["本命のST順位", "本命のST順位"], ["風速", "風速"], ["波", "波"],
+          ["公式", r => resultLink(r, d.value)]], x, buyRow)), {noBuy: true}), tableBox,
+        h("p", {className: "note", textContent: "単勝配当・3連単配当・3連複配当は100円あたりの払戻 (100で割るとオッズ)。予想オッズは前日までのデータから見積もったオッズです。"}),
+        pats.length ? h("details", {}, h("summary", {textContent: "3連単・3連複の買い方ごと、レースごとの払戻"}),
+          table([["場", "場"], ["R", "R"], ["印 (◎○▲△□)", "印"], ["結果", "結果"], ["1〜3着の印", "結果の印"],
+            ...pats.map(p => [p, r => r[p + " 的中"] > 0 ? h("span", {className: "ok", textContent: r[p + " 払戻"].toLocaleString()}) : h("span", {className: "ng", textContent: "×"})])], ks)) : "");
+    };
     const load = async () => {
       state.checkDate = d.value;
+      out.replaceChildren(h("div", {className: "note", textContent: "読み込み中…"}));
       try {
-        const j = await api(`/api/check?date=${d.value}`);
-        const s = j.summary || {};
-        const tb = h("div");
-        const kp = (label, v) => h("div", {className: "kpi"}, h("b", {textContent: v}), h("span", {textContent: label}));
-        out.replaceChildren(
-          h("div", {className: "kpis"},
-            kp("レース", j.rows.length), kp("本命の1着率", pct(s["本命1着率"])), kp("予想着順の的中率", pct(s["予想着順的中率"])),
-            kp("3連単上位5点の的中率", pct(s["三連単上位5点的中率"])), kp("3連単上位5点の回収率", pct(s["三連単上位5点回収率"])),
-            kp(`単勝の買い目 ${s["単勝期待値買い_点数"] ?? 0}点 回収率`, pct(s["単勝期待値買い_回収率"])),
-            kp(`直前の買い目 ${s["live買い_点数"] ?? 0}点 回収率`, pct(s["live買い_回収率"]))),
-          j.kaime && j.kaime.length ? kaimeView(j.kaime) : h("p", {className: "note", textContent: "3連単・3連複の買い方ごとの収支は、この日はまだありません (答え合わせをやり直すと出ます)。"}),
-          h("h3", {textContent: "レースごと"}),
-          filterBar("check", j.rows, rs => tb.replaceChildren(table([["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命1着確率", r => pct0(r["本命1着確率"])],
-            ["予想着順", "予想着順"], ["結果", "結果"],
-            ["本命1着", r => r["本命1着"] === true || r["本命1着"] === "True" ? h("span", {className: "ok", textContent: "○"}) : h("span", {className: "ng", textContent: "×"})],
-            ["本命の着", "本命の着"], ["決まり手", "決まり手"], ["本命のST順位", "本命のST順位"], ["風速", "風速"], ["波", "波"],
-            ["3連単配当", "三連単配当"], ["単勝買い", "単勝点数"], ["単勝払戻", "単勝払戻"]], rs))), tb);
-      } catch (e) { out.replaceChildren(h("p", {}, e.message, hint("。「答え合わせ」を押してください (当日は boatrace.jp の結果ページ、翌日からは公式の成績ファイルで答え合わせします)。"))); }
+        [j, pred] = await Promise.all([api(`/api/check?date=${d.value}`),
+          api(`/api/predictions?date=${d.value}`).then(x => Object.fromEntries(x.rows.map(r => [r.race_id, r]))).catch(() => ({}))]);
+        draw();
+      } catch (e) { j = null; out.replaceChildren(h("p", {}, e.message, hint("。「答え合わせ」を押してください (当日は boatrace.jp の結果ページ、翌日からは公式の成績ファイルで答え合わせします)。"))); }
       try {
         const t = await api("/api/totals");
-        tot.replaceChildren(h("h3", {textContent: "これまでの記録"}),
-          table([["日付", "date"], ["レース", "races"], ["本命1着率", r => pct(r["本命1着率"])], ["予想着順", r => pct(r["予想着順的中率"])],
+        tot.replaceChildren(h("details", {}, h("summary", {textContent: "これまでの記録 (日ごと・全レース)"}),
+          table([["日付", "date"], ["レース", "races"], ["単勝 点数", "単勝期待値買い_点数"], ["単勝 回収", r => rateCell(r["単勝期待値買い_回収率"])],
+            ["本命1着率", r => pct(r["本命1着率"])], ["予想着順", r => pct(r["予想着順的中率"])],
             ["3連単5点 的中", r => pct(r["三連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["三連単上位5点回収率"])],
-            ["単勝 点数", "単勝期待値買い_点数"], ["単勝 回収", r => pct(r["単勝期待値買い_回収率"])],
             ["直前 点数", "live買い_点数"], ["直前 回収", r => pct(r["live買い_回収率"])]], t.rows.slice().reverse()),
-          kaimeTotals(t.rows));
+          h("h4", {textContent: "全レースを買い方ごとに買っていたらの累計 (買いのレースだけの累計は「成績」にあります)"}), kaimeTotals(t.rows)));
       } catch { tot.replaceChildren(); }
     };
     d.onchange = load;
-    el.append(h("div", {className: "bar"}, d,
+    scope.onchange = () => j && draw();
+    el.append(h("div", {className: "bar"}, d, scope,
       h("button", {className: "btn", textContent: "答え合わせ", dataset: {run: 1}, onclick: () => run("check", d.value)})), out, tot);
     load();
   }},
@@ -672,14 +902,16 @@ const PAGES = {
   seiseki: {title: "成績", async render(el) {
     const src = h("select", {}, [["", "実際に予想した分"], ["backtest", "過去10年の検証 (予想し直し)"]].map(([v, t]) => h("option", {value: v, textContent: t})));
     src.value = state.seisekiSrc || "";
+    const scope = h("select", {}, [["buy", "買いのレース (単勝の買い目があったレース)"], ["all", "全レース"]].map(([v, t]) => h("option", {value: v, textContent: t})));
+    scope.value = state.seisekiScope || "buy";
     const out = h("div");
     el.append(out);
-    const grade = g => h("span", {className: "g " + (g === "◎" ? "g-good" : g === "×" ? "g-bad" : ""), textContent: g});
-    const money = v => v == null ? "" : Math.round(v).toLocaleString() + "円";
-    const byCols = key => [["評価", r => grade(r["評価"])], [key, key], ["レース", "レース"], ["本命1着率", r => pct0(r["本命1着率"])],
-      ["予想の本命1着確率", r => pct0(r["予想の本命1着確率"])], ["予想着順 的中", r => pct(r["予想着順的中率"])],
-      ["3連単5点 的中", r => pct0(r["3連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["3連単上位5点回収率"])],
-      ["単勝 点数", "単勝点数"], ["単勝 回収", r => pct(r["単勝回収率"])],
+    // 年・月・日ごとの表は単勝の買い目 (買いのレース) の列を先に
+    const byCols = key => [["評価", r => grade(r["評価"])], [key, key], ["単勝 点数", "単勝点数"],
+      ["単勝 的中率", r => r["単勝点数"] ? pct(r["単勝的中"] / r["単勝点数"]) : ""], ["単勝 回収", r => rateCell(r["単勝回収率"])],
+      ["単勝 収支", r => r["単勝点数"] ? signYen(r["単勝点数"] * 100 * ((r["単勝回収率"] || 0) - 1)) : ""],
+      ["レース", "レース"], ["本命1着率", r => pct0(r["本命1着率"])], ["予想の本命1着確率", r => pct0(r["予想の本命1着確率"])],
+      ["予想着順 的中", r => pct(r["予想着順的中率"])], ["3連単5点 的中", r => pct0(r["3連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["3連単上位5点回収率"])],
       ["一番良かった買い方", "一番良かった買い方", "l"], ["その回収率", r => pct(r["その回収率"])], ["備考", "備考", "memo"]];
     const load = async () => {
       state.seisekiSrc = src.value;
@@ -689,33 +921,42 @@ const PAGES = {
         out.replaceChildren(h("div", {className: "bar"}, src), h("p", {}, e.message, src.value ? "" : hint("。予想して答え合わせをすると、ここにたまっていきます。")));
         return;
       }
-      const names = Object.keys(s.periods);
-      const sel = h("select", {}, names.map(n => h("option", {value: n, textContent: `${n} (${s.periods[n].from}〜${s.periods[n].to}、${s.periods[n].days}日)`})));
-      sel.value = names.includes(state.seisekiPeriod) ? state.seisekiPeriod : names[0];
+      const sel = h("select");
       const box = h("div");
       const draw = () => {
+        state.seisekiScope = scope.value;
+        const buy = scope.value === "buy" && s.buy;
+        const P = buy ? s.buy.periods : s.periods;
+        const names = Object.keys(P);
+        const keep = names.includes(sel.value) ? sel.value : names.includes(state.seisekiPeriod) ? state.seisekiPeriod : names[0];
+        sel.replaceChildren(...names.map(n => h("option", {value: n, textContent: `${n} (${P[n].from}〜${P[n].to}、${P[n].days}日)`})));
+        sel.value = keep;
         state.seisekiPeriod = sel.value;
-        const rows = s.periods[sel.value].rows;
-        const hit = rows.filter(r => r["区分"] === "当たり方"), bet = rows.filter(r => r["区分"] !== "当たり方");
+        const rows = P[sel.value].rows;
+        const hit = rows.filter(r => r["区分"] === "当たり方");
+        const tan = rows.find(r => r["区分"] === "単勝" && String(r["項目"]).startsWith("単勝の買い目"));
         box.replaceChildren(
-          h("h3", {textContent: "当たり方"}),
-          table([["評価", r => grade(r["評価"])], ["項目", "項目", "l"], ["レース", "レース"], ["的中", "的中"],
-            ["的中率", r => pct(r["的中率"])], ["備考", "備考", "memo"]], hit),
-          h("h3", {textContent: "買っていたらの収支 (1点100円)"}),
-          table([["評価", r => grade(r["評価"])], ["券種", "区分"], ["買い方", "項目", "l"], ["点数", "点数"], ["的中", "的中"],
-            ["的中率", r => pct0(r["的中率"])], ["投資", r => money(r["投資"])], ["払戻", r => money(r["払戻"])],
-            ["収支", r => r["収支"] == null ? "" : h("span", {className: r["収支"] > 0 ? "ok" : "err", textContent: yen(r["収支"])})],
-            ["回収率", r => pct(r["回収率"])], ["備考", "備考", "memo"]], bet, r => r["評価"] === "◎" ? "buy" : ""));
+          tan ? h("div", {className: "kpis"},
+            kpi("単勝の買い目の回収率", pct(tan["回収率"]), "real"), kpi("単勝の収支 (1点100円)", yen(tan["収支"]), "real"),
+            kpi("単勝の的中", `${tan["的中"]} / ${tan["レース"]}R (${pct0(tan["的中率"])})`, "real"), kpi("単勝の点数", `${tan["点数"]}点`, "real")) : "",
+          h("h3", {textContent: buy ? "買いのレースを買い方ごとに買っていたら (1点100円)" : "全レースを買い方ごとに買っていたら (1点100円)"}),
+          waysView(waysOfRows(rows), {grade: true}),
+          h("details", {}, h("summary", {textContent: buy ? "当たり方 (買いのレースでの本命の1着率など)" : "当たり方 (本命の1着率など)"}),
+            table([["評価", r => grade(r["評価"])], ["項目", "項目", "l"], ["レース", "レース"], ["的中", "的中"],
+              ["的中率", r => pct(r["的中率"])], ["備考", "備考", "memo"]], hit)));
       };
       sel.onchange = draw;
+      scope.onchange = draw;
       draw();
-      out.replaceChildren(h("div", {className: "bar"}, src, sel),
-        h("p", {className: "note", textContent: (src.value ? "過去10年を1年ずつ、その年より前のデータだけで学習したモデルで予想し直して答え合わせした成績です (未来のデータは使っていないので、毎日の予想と同じ条件)。直前情報・実際のオッズは使わない前日の予想です。" : "これまでの答え合わせを全部まとめた成績です。") +
-          "評価: ◎ 良い / ○ まずまず / △ 今ひとつ / × 悪い。回収率は 100%以上で黒字、ボートレースの払戻率は約75%なので、75%未満はでたらめに買うより悪い買い方です。的中率は予想した確率と比べています。"}),
+      out.replaceChildren(h("div", {className: "bar"}, src, s.buy ? scope : "", sel),
+        h("p", {className: "note", textContent: (s.buy && "" ? "" : "") + (src.value ? "過去10年を1年ずつ、その年より前のデータだけで学習したモデルで予想し直して答え合わせした成績です (直前情報・実際のオッズは使わない前日の予想)。" +
+          (s.buy ? "" : "この検証は全レースの集計で、買いのレースの成績は「単勝の買い目」の行です。") : "") +
+          (s.buy ? "「買いのレース」= 単勝の買い目 (期待値1以上) があったレース。そのレースで3連単・3連複も買っていたらの成績も出しています。" : "") +
+          "評価: ◎ 良い / ○ まずまず / △ 今ひとつ / × 悪い。回収率は100%以上で黒字。ボートレースの払戻率は約75%なので、75%未満はでたらめに買うより悪い買い方です。"}),
         box,
-        s.years ? h("div", {}, h("h3", {textContent: "年ごと"}), table(byCols("年"), s.years)) : "",
+        s.years ? h("details", {}, h("summary", {textContent: "年ごと (年ごとの変化は「年ごとの実績」のグラフで見られます)"}), table(byCols("年"), s.years)) : "",
         s.months ? h("details", {open: !s.years}, h("summary", {textContent: `月ごと (${s.months.length}か月)`}), table(byCols("月"), s.months)) : "",
-        h("details", {open: !s.years}, h("summary", {textContent: `日ごと (直近${s.days.length}日)`}), table(byCols("日付"), s.days)));
+        h("details", {open: !s.years}, h("summary", {textContent: `日ごと (直近${s.days.length}日。カレンダーでも見られます)`}), table(byCols("日付"), s.days)));
     };
     src.onchange = load;
     load();
@@ -729,37 +970,42 @@ const PAGES = {
     const years = bt.years.slice().sort((a, b) => a["年"].localeCompare(b["年"]));
     const all = periodRow(bt.periods["全期間"].rows, "通算");
     const p = bt.periods["全期間"];
+    const tanHit = y => y["単勝点数"] ? y["単勝的中"] / y["単勝点数"] : null;
+    const bal = y => y["単勝点数"] ? y["単勝点数"] * 100 * ((y["単勝回収率"] || 0) - 1) : null;
     el.append(h("h2", {textContent: `過去の検証 ${p.from}〜${p.to} (${years.length}年、${(all["レース"] || 0).toLocaleString()}レース)`}),
       h("div", {className: "kpis"},
-        kpi("本命の1着率", pct(all["本命1着率"]), "past"), kpi("予想着順 (3連単1点) の的中率", pct(all["予想着順的中率"]), "past"),
-        kpi("3連単上位5点の的中率", pct(all["3連単上位5点的中率"]), "past"), kpi("3連単上位5点の回収率", pct(all["3連単上位5点回収率"]), "past"),
-        kpi("単勝の買い目の的中率", pct(all["単勝点数"] ? all["単勝的中"] / all["単勝点数"] : null), "past"),
-        kpi("単勝の買い目の回収率", pct(all["単勝回収率"]), "past")),
-      h("p", {className: "note", textContent: "1年ずつ、その年より前のデータだけで学習したモデルで予想し直して答え合わせした成績です (未来のデータは使っていないので、毎日の予想と同じ条件)。直前情報・実際のオッズは使わない前日の予想です。"}));
-    const xs = years.map(y => y["年"]);
+        kpi("単勝の買い目の回収率", pct(all["単勝回収率"]), "past"),
+        kpi("単勝の買い目の的中率", pct(tanHit(all)), "past"),
+        kpi("黒字の年", `${years.filter(y => (y["単勝回収率"] || 0) >= 1).length} / ${years.length}年`, "past"),
+        kpi("本命の1着率", pct(all["本命1着率"]), "past"), kpi("3連単上位5点の回収率", pct(all["3連単上位5点回収率"]), "past")),
+      h("p", {className: "note", textContent: `1年ずつ、その年より前のデータだけで学習したモデルで予想し直して答え合わせした成績です (未来のデータは使っていないので、毎日の予想と同じ条件)。直前情報・実際のオッズは使わない前日の予想です。${p.from.slice(0, 4)}年は${+p.from.slice(5, 7)}月${+p.from.slice(8)}日から、${p.to.slice(0, 4)}年は${+p.to.slice(5, 7)}月${+p.to.slice(8)}日までの途中の年です。`}));
+    const xs = years.map(y => y["年"].slice(2) + "年");
+    const card = (title, note, chart) => h("div", {className: "card"}, h("h3", {style: "margin-top:0", textContent: title}), h("div", {className: "note", textContent: note}), chart);
     el.append(h("div", {className: "charts"},
-      h("div", {className: "card"}, h("h3", {style: "margin-top:0", textContent: "的中率"}),
-        lineChart(xs, [{name: "本命の1着", short: "本命1着", color: SERIES[0], values: years.map(y => y["本命1着率"])},
-          {name: "3連単上位5点", short: "3連単5点", color: SERIES[1], values: years.map(y => y["3連単上位5点的中率"])},
-          {name: "予想着順 (3連単1点)", short: "予想着順", color: SERIES[2], values: years.map(y => y["予想着順的中率"])}], {max: 0.8})),
-      h("div", {className: "card"}, h("h3", {style: "margin-top:0", textContent: "回収率"}),
-        lineChart(xs, [{name: "単勝の買い目", short: "単勝", color: SERIES[0], values: years.map(y => y["単勝回収率"])},
-          {name: "3連単上位5点", short: "3連単5点", color: SERIES[1], values: years.map(y => y["3連単上位5点回収率"])},
-          {name: "一番良かった3連単・3連複", short: "一番良い", color: SERIES[2], values: years.map(y => y["その回収率"])}],
-          {max: 1.25, refs: [{v: 1, label: "100% 黒字"}, {v: 0.75, label: "75% 払戻率"}]}))));
+      card("単勝の買い目の回収率", "破線の100%より上 (緑) が黒字の年。", divBars(xs, years.map(y => y["単勝回収率"]), {ref: 1, refLabel: "100% 黒字"})),
+      card("単勝の買い目の的中率", `破線 = 10年の通算 ${pct(tanHit(all))}。緑はそれより当たった年。`, divBars(xs, years.map(tanHit), {ref: tanHit(all), refLabel: `通算 ${pct(tanHit(all))}`})),
+      card("本命の1着率", `破線 = 10年の通算 ${pct(all["本命1着率"])}。`, divBars(xs, years.map(y => y["本命1着率"]), {ref: all["本命1着率"], refLabel: `通算 ${pct(all["本命1着率"])}`})),
+      card("3連単上位5点の回収率", "破線 = 払戻率 約75% (でたらめに買ったとき)。", divBars(xs, years.map(y => y["3連単上位5点回収率"]), {ref: 0.75, refLabel: "75% 払戻率"}))));
     const realRows = [];
     if (real) {
       if (real.years) real.years.forEach(y => realRows.push({...y, "年": `${y["年"]} 実際`, real: true}));
       else { const rp = real.periods["全期間"]; realRows.push({...periodRow(rp.rows, `実際 ${rp.from}〜${rp.to}`), real: true}); }
     }
+    const prev = {};
+    years.forEach((y, i) => prev[y["年"]] = years[i - 1]);
+    const withD = (f, fmt = pct) => r => { const pv = !r.real && prev[r["年"]]; return h("span", {}, fmt(f(r)), pv ? delta(f(r), f(pv)) : ""); };
     el.append(h("h2", {textContent: "年ごとの的中率・回収率"}),
-      table([["評価", r => grade(r["評価"])], ["年", "年", "l"], ["レース", r => r["レース"] == null ? "" : r["レース"].toLocaleString(), "", r => r["レース"]],
-        ["本命1着率", r => pct(r["本命1着率"])], ["予想着順 的中", r => pct(r["予想着順的中率"])],
-        ["3連単5点 的中", r => pct(r["3連単上位5点的中率"])], ["3連単5点 回収", r => pct(r["3連単上位5点回収率"])],
-        ["単勝 点数", "単勝点数"], ["単勝 的中", r => r["単勝点数"] ? pct(r["単勝的中"] / r["単勝点数"]) : ""], ["単勝 回収", r => pct(r["単勝回収率"])],
+      table([["評価", r => grade(r["評価"])], ["年", "年", "l"],
+        ["単勝 点数", r => r["単勝点数"] == null ? "" : r["単勝点数"].toLocaleString(), "", r => r["単勝点数"]],
+        ["単勝 的中率", withD(tanHit), "", tanHit], ["単勝 回収率", withD(r => r["単勝回収率"]), "", r => r["単勝回収率"]],
+        ["単勝 収支", r => signYen(bal(r)), "", bal],
+        ["本命1着率", withD(r => r["本命1着率"]), "", r => r["本命1着率"]],
+        ["レース", r => r["レース"] == null ? "" : r["レース"].toLocaleString(), "", r => r["レース"]],
+        ["予想着順 的中", r => pct(r["予想着順的中率"])],
+        ["3連単5点 的中", r => pct(r["3連単上位5点的中率"])], ["3連単5点 回収", withD(r => r["3連単上位5点回収率"]), "", r => r["3連単上位5点回収率"]],
         ["一番良かった3連単・3連複", "一番良かった買い方", "l"], ["その回収率", r => pct(r["その回収率"])], ["備考", "備考", "memo"]],
-        [...realRows, ...bt.years], r => r.real ? "buy" : ""),
-      h("p", {className: "note", textContent: "赤い行は実際に予想して答え合わせした分です。見出しを押すと並べ替えます。評価: ◎ 良い / ○ まずまず / △ 今ひとつ / × 悪い。ボートレースの払戻率は約75%なので、回収率75%未満はでたらめに買うより悪い買い方です。買い方ごとの詳しい成績は「成績」にあります。"}));
+        [...realRows, ...years.slice().reverse()], r => r.real ? "hi" : ""),
+      h("p", {className: "note", textContent: "▲▼ は前の年からの増減 (ポイント)。橙の行は実際に予想して答え合わせした分です。見出しを押すと並べ替えます。評価: ◎ 良い / ○ まずまず / △ 今ひとつ / × 悪い。買い方ごとの詳しい成績は「成績」にあります。"}));
   }},
 
   review: {title: "先週の振り返り", async render(el) {
@@ -837,8 +1083,8 @@ let current = "matome";
 function show(name) {
   current = name;
   document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.page === name));
-  const el = $("#main");
-  el.replaceChildren();
+  const el = h("div");  // 画面ごとに新しい箱 (前の画面の読み込みが遅れて終わっても、今の画面を書き換えない)
+  $("#main").replaceChildren(el);
   PAGES[name].render(el).then(() => pollJob());
   try { localStorage.setItem("page", name); } catch {}
 }

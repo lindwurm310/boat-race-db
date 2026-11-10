@@ -337,7 +337,7 @@ def compare(pred, races, res, pay):
                          風速=races.at[rid, "wind_speed"], 波=races.at[rid, "wave_cm"],
                          本命1着=order[0] == fav, 本命3着以内=f.get(fav) in (1, 2, 3),
                          予想着順的中=r["予想着順"] == actual, 上位5点的中=actual in tickets,
-                         三連単配当=pay3.get((rid, actual)),
+                         三連単配当=pay3.get((rid, actual)), 単勝配当=tan.get((rid, order[0])) if order[0] else None,
                          **({"3連単上位5点の的中確率": r["3連単上位5点の的中確率"]} if "3連単上位5点の的中確率" in r else {}),
                          **ev_check(r, rid, tan)))
     return pd.DataFrame(rows)
