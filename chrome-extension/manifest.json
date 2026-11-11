@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ボートレース予想",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "ボートレース予想の操作画面を開くボタンと、boatrace.jp のレースのページにおすすめの買い目を出すパネル。テレボートの投票画面では今日の単勝買い目をベットリストに入れる。",
   "icons": {
     "16": "icon16.png",
@@ -45,6 +45,15 @@
       "css": [
         "panel.css"
       ]
+    },
+    {
+      "matches": [
+        "https://ib.mbrace.or.jp/*"
+      ],
+      "js": [
+        "login.js"
+      ],
+      "all_frames": false
     }
   ]
 }
