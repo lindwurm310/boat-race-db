@@ -66,6 +66,7 @@ jobs:
           python analysis/note.py --date tomorrow --out site/note
           python analysis/promo.py --out site || echo "宣伝用ページを作れませんでした (予想ページはそのまま出す)"   # X の投稿文に明日の記事の告知を足す
           find predictions -maxdepth 1 -name '*.csv' -exec cp {} site/history/ \;
+          python analysis/site.py --out site || echo "予想ページのデータを作れませんでした"   # 明日の予想を予想ページ (今日の予想・カレンダー) にも出す
       - name: gh-pages に置く
         if: steps.done.outputs.skip != '1'
         run: |
