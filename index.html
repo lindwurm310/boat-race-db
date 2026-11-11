@@ -727,7 +727,8 @@ const PAGES = {
       const M = CAL_METRIC[met.value];
       const days = (s && s.days) || [];
       const dm = Object.fromEntries(days.map(r => [r["日付"], r]));
-      const months = [...new Set([...days.map(r => r["日付"].slice(0, 7)), ...Object.keys(preds).map(d => d.slice(0, 7))])].sort();
+      const months = [...new Set([...days.map(r => r["日付"].slice(0, 7)), ...Object.keys(preds).map(d => d.slice(0, 7)),
+        ...(src.value ? [] : [t.slice(0, 7), addDays(t, 14).slice(0, 7)])])].sort();
       if (!months.length) { out.replaceChildren(h("p", {}, "まだ成績がありません。")); return; }
       let ym = state.calMonth && months.includes(state.calMonth) ? state.calMonth : (months.includes(t.slice(0, 7)) ? t.slice(0, 7) : months[months.length - 1]);
       state.calMonth = ym;
@@ -735,6 +736,7 @@ const PAGES = {
       const go = k => { state.calMonth = months[i + k]; draw(); };
       const [Y, Mo] = ym.split("-").map(Number);
       // 過去の日の平均 (予想の日の「狙い目」の目安)
+      const wd = [0, 1, 2, 3, 4, 5, 6].map(k => { const rs = days.filter(r => new Date(r["日付"] + "T00:00:00Z").getUTCDay() === k); return {n: rs.length, v: rs.length ? M.agg(rs) : null}; });
       const avgBuy = days.length ? days.reduce((a, r) => a + (r["単勝点数"] || 0), 0) / days.length : null;
       const grid = h("div", {className: "cal"}, ["日", "月", "火", "水", "木", "金", "土"].map((w, k) => h("div", {className: "wd" + (k === 0 ? " sun" : k === 6 ? " sat" : ""), textContent: w})));
       const first = new Date(Date.UTC(Y, Mo - 1, 1)).getUTCDay(), nd = new Date(Date.UTC(Y, Mo, 0)).getUTCDate();
@@ -760,6 +762,12 @@ const PAGES = {
           cell.style.cursor = "pointer";
           cell.onclick = () => { state.date = date; show("today"); };
           cell.title = `${date} の予想: 単勝の買い目 ${p.buy}点 (押すと今日の予想の画面へ)`;
+        } else if (date > t && date <= addDays(t, 14)) {  // まだ番組表が出ていない日: 予想が出る時刻と、その曜日のこれまでの成績
+          const k = new Date(date + "T00:00:00Z").getUTCDay(), w = wd[k];
+          cell.classList.add("pred");
+          cell.append(h("div", {className: "sub", style: "color:#3b6fd4", textContent: date === addDays(t, 1) ? "予想は今日16時ごろ" : "予想は前日16時ごろ"}),
+            w && w.n ? h("div", {className: "sub", style: "color:#667", textContent: `これまでの${"日月火水木金土"[k]}曜 ${pct0(w.v)}`}) : "");
+          cell.title = `${date}: 番組表は前日に出るので、予想は前日の16時ごろに入ります。` + (w && w.n ? `これまでの${"日月火水木金土"[k]}曜日の${M.name}は ${pct(w.v)} (${w.n}日)。` : "");
         }
         grid.append(cell);
       }
@@ -779,7 +787,7 @@ const PAGES = {
         h("p", {className: "note"}, h("span", {className: "swatch", style: `background:${M.color(M.hi)}`}), M.legend[0],
           h("span", {className: "swatch", style: `background:${M.color(M.mid)}`}), M.legend[1],
           h("span", {className: "swatch", style: `background:${M.color(M.lo)}`}), M.legend[2],
-          "。★ = 単勝の回収率120%以上の日。点線の日は予想だけ (まだ答え合わせ前) で、数字は単勝の買い目の点数。これまでの平均より多い日に「狙い目」と出します。押すとその日の予想を開きます。"),
+          "。★ = 単勝の回収率120%以上の日。点線の日はこれからの日。予想が出ている日 (今日・明日) は単勝の買い目の点数で、これまでの平均より多い日に「狙い目」と出します。押すとその日の予想を開きます。明日の予想は前日の16時ごろに入り、その先の日はその曜日のこれまでの成績を参考に出しています。"),
         weekdayTable(days, M),
         s && s.months ? monthHeat(s.months, M, ym => { if (months.includes(ym)) { state.calMonth = ym; draw(); } }) : "");
     };
@@ -790,7 +798,7 @@ const PAGES = {
       preds = {};
       if (!src.value) {  // 答え合わせ前の予想 (今日・明日) の買い目の数
         let ds = [t, addDays(t, 1)];
-        try { const st = await api("/api/status"); if (st.dates) ds = st.dates.predictions.filter(d => d >= addDays(t, -1)); } catch {}
+        try { const st = await api("/api/status"); if (st.dates) ds = [...new Set([...st.dates.predictions.filter(d => d >= addDays(t, -1)), t, addDays(t, 1)])]; } catch {}
         const done = new Set(((s && s.days) || []).map(r => r["日付"]));
         await Promise.all(ds.filter(d => !done.has(d)).map(async d => {
           try {
