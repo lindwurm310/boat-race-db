@@ -1066,7 +1066,7 @@ const PAGES = {
         h("div", {}, `データ (DB): ${s.db_last || "?"} の成績まで`),
         h("div", {}, `予想モデル: ${s.trained || "?"} のデータまでで学習`),
         h("div", {}, `予想 ${(d.predictions || []).length}日分・答え合わせ ${(d.check || []).length}日分`),
-        h("div", {className: "note", textContent: "このページは GitHub Actions が毎朝6時ごろに自動で更新します (成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 7日ごとに学習し直し → 今日と明日の予想)。展示タイム・実際のオッズでの直前のおすすめは、パソコンのサーバーと Chrome 拡張機能でだけ見られます。"})));
+        h("div", {className: "note", textContent: "このページは GitHub Actions が毎朝6時ごろに自動で更新します (成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 昨日までのデータで学習し直し → 今日と明日の予想)。展示タイム・実際のオッズでの直前のおすすめは、パソコンのサーバーと Chrome 拡張機能でだけ見られます。"})));
       return;
     }
     const row = (label, cmd, note) => h("div", {className: "card"},
@@ -1081,7 +1081,7 @@ const PAGES = {
         h("div", {className: "note", textContent: "GPU は LightGBM の OpenCL 版で使います (NVIDIA・AMD・Intel のグラフィックドライバーが入っていれば自動)。使えないときは CPU の全コアで学習します。"})),
       row("データを取り込む", "update", "DB の最終日の翌日〜昨日の成績と番組表を公式サイトから取り込みます (数分)"),
       row("学習し直す", "train", "直近2年のデータで予想モデルを作り直します (40分〜1時間半。GPU があれば短くなります)"),
-      row("毎朝の処理を今すぐ", "daily", "取り込み → 昨日の答え合わせ → (月曜は振り返り) → 7日ごとに学習し直し"),
+      row("毎朝の処理を今すぐ", "daily", "取り込み → 昨日の答え合わせ → (月曜は振り返り) → 学習し直し"),
       s.db ? "" : row("DB をダウンロード", "setup", "GitHub の Release から過去の成績 (約1.1GB) を取得します"));
   }},
 };
