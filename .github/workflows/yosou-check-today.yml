@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: 対象日 (その日) を決める。GitHub の定時実行は数時間遅れて翌日になることがあるので、12時間引いて数える
+        run: echo "TARGET=$(date -d '12 hours ago' +%F)" >> "$GITHUB_ENV"
       - name: checkout gh-pages (これまでの予想と答え合わせ)
         run: |
           git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
@@ -35,7 +37,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: 今日の答え合わせ (1レース1秒、全場で数分〜30分)
-        run: python analysis/yosou.py check --date today
+        run: python analysis/yosou.py check --date "$TARGET"
       - name: ページを作る
         run: |
           python analysis/site.py --out site

@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: 対象日 (明日) を決める。GitHub の定時実行は数時間遅れて日付をまたぐことがあるので、12時間足して数える
+        run: echo "TARGET=$(date -d '+12 hours' +%F)" >> "$GITHUB_ENV"
       - name: checkout gh-pages
         run: |
           git clone --depth 1 --branch gh-pages "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site
@@ -33,7 +35,7 @@ jobs:
       - name: もう明日の記事があれば何もしない
         id: done
         run: |
-          T=$(date -d tomorrow +%F)
+          T=$TARGET
           if [ -f site/note/latest.json ] && grep -q "\"date\": \"$T\"" site/note/latest.json; then
             echo "明日 ($T) の記事は作成済み"; echo "skip=1" >> "$GITHUB_OUTPUT"
           fi
@@ -62,8 +64,8 @@ jobs:
         if: steps.done.outputs.skip != '1'
         run: |
           if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
-          python analysis/yosou.py predict --date tomorrow
-          python analysis/note.py --date tomorrow --out site/note
+          python analysis/yosou.py predict --date "$TARGET"
+          python analysis/note.py --date "$TARGET" --out site/note
           python analysis/promo.py --out site || echo "宣伝用ページを作れませんでした (予想ページはそのまま出す)"   # X の投稿文に明日の記事の告知を足す
           find predictions -maxdepth 1 -name '*.csv' -exec cp {} site/history/ \;
           python analysis/site.py --out site || echo "予想ページのデータを作れませんでした"   # 明日の予想を予想ページ (今日の予想・カレンダー) にも出す
@@ -74,5 +76,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -q -m "Note記事 $(date -d tomorrow +%F)" || echo "変更なし"
+          git commit -q -m "Note記事 $TARGET" || echo "変更なし"
           git push origin gh-pages
