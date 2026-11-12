@@ -223,7 +223,7 @@ LightGBM で各艇の1着確率を出し、2・3着は Harville 型（1着を除
 
 ### iPad で見る（サーバーなし）
 
-GitHub Actions（`.github/workflows/yosou-page.yml`）が毎朝 6:00 に、成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 昨日までのデータでモデルを学習し直す → 今日と明日の予想をして、GitHub Pages に置く。モデルは毎日学習し直すので、いつも昨日までのデータで予想する。iPad の Safari で https://lindwurm310.github.io/boat-race-db/ を開けば、操作画面と同じ表（今日の予想・1週間・答え合わせ・振り返り・選手の成績）が見られる。
+GitHub Actions（`.github/workflows/yosou-page.yml`）が、前の日の成績ファイルが公式サイトに出しだい（深夜1:00〜9:00 に毎時見に行く）、成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 昨日までのデータでモデルを学習し直す → 今日と明日の予想をして、GitHub Pages に置く。モデルは毎日学習し直すので、いつも昨日までのデータで予想する。iPad の Safari で https://lindwurm310.github.io/boat-race-db/ を開けば、操作画面と同じ表（今日の予想・1週間・答え合わせ・振り返り・選手の成績）が見られる。
 
 - 最初の1回: このワークフローが main にある状態で、Actions タブの「yosou-page」→「Run workflow」で実行（初回は DB の取得と学習で1〜2時間）。終わったら Settings → Pages → Source を「Deploy from a branch」「gh-pages」「/ (root)」にする
 - リポジトリが公開なので、ページも URL を知っていれば誰でも見られる
@@ -335,7 +335,7 @@ yosou racer              … 全選手 (30走以上) の成績表 → prediction
 Note.com に公式の投稿 API はないので、記事は毎日自動で「下書き」まで作り、公開は Note の画面で手で行う。
 
 - 書式は `analysis/note/template.md` の1か所にまとめてある。文章を変えたいときはこのファイルを直す（`${...}` は消さない）。
-- 毎晩 22:30 の `yosou-check-today` が、当日の答え合わせのあとに明日を予想して記事を作り、GitHub Pages の `note/` に置く（`note/index.html` が一覧）。番組表がまだ出ていなかったときは、翌朝 6:00 の `yosou-page` が当日分を作る。
+- 毎晩 22:30 の `yosou-check-today` が、当日の答え合わせのあとに明日を予想して記事を作り、GitHub Pages の `note/` に置く（`note/index.html` が一覧）。番組表がまだ出ていなかったときは、翌朝の `yosou-page` が当日分を作る。
 - 記事に載せた予想は翌朝の予想で上書きしないので、記事の買い目と答え合わせの買い目は同じになる。
 - 見出し画像（競艇新聞ふう、`note/design/make_header.py --style shinbun`）も毎日 `note/YYYYMMDD.png` に作る。HTML の「見出し画像を保存」から保存して Note の見出し画像に設定する。
 - 投稿のしかた: `note/YYYYMMDD.html` を開いて「タイトルをコピー」「本文をコピー」→ Note の新規記事に貼る →「（ここから有料エリア）」の行で有料エリアのラインを引く → 価格（300円。`note.py --price` で変えられる）・ハッシュタグを確認して公開。

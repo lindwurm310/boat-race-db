@@ -8,7 +8,7 @@ GitHub（github.com・github.io）の URL や「GitHub で作っている」こ�
 
 | ページ | 中身 | 更新 |
 |---|---|---|
-| [実戦成績](https://lindwurm310.github.io/boat-race-db/jisseki/) | 公開した予想の全件の答え合わせ・通算・収支の推移・注意書き | 毎朝6時・毎晩22時半 |
+| [実戦成績](https://lindwurm310.github.io/boat-race-db/jisseki/) | 公開した予想の全件の答え合わせ・通算・収支の推移・注意書き | 毎朝 (前日の成績が出しだい)・毎晩22時半 |
 | [X の投稿文](https://lindwurm310.github.io/boat-race-db/sns/) | 夕方の記事告知・朝の無料予想・夜の結果・週のまとめ。「Xで投稿」ボタン付き | 16時・6時・22時半 |
 | `jisseki/og.png` | 実戦成績の画像。投稿文のページから保存して、夜・週の投稿に添付する | 同上 |
 
