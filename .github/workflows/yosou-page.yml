@@ -1,9 +1,13 @@
 name: yosou-page
-# 毎朝 6:00 (日本時間) に予想・答え合わせ・振り返りを作り、GitHub Pages (gh-pages ブランチ) に置く。
+# 毎日、昨日の成績ファイルが出たらすぐ (深夜1:00〜9:00 の間に毎時見る) 成績の取り込み・答え合わせ・振り返り・学習し直し・予想をして、GitHub Pages (gh-pages ブランチ) に置く。
 # iPad などからサーバーなしで見るため。Settings → Pages → Source を「Deploy from a branch」「gh-pages」にしておく。
 on:
   schedule:
-    - cron: "0 21 * * *"   # UTC 21:00 = 日本時間 6:00
+    # 昨日の成績ファイル (K) が公式サイトに出たら、できるだけ早く取り込んで学習し直す。
+    # 深夜1:00〜8:00 (日本時間) に毎時見に行き、出ていれば実行、まだなら次の回に回す。
+    # GitHub の予定実行は数時間遅れることがあるので、早い時刻から何回も見る。
+    - cron: "0 16-23 * * *"   # UTC 16:00〜23:00 = 日本時間 1:00〜8:00
+    - cron: "0 0 * * *"       # UTC 0:00 = 日本時間 9:00 (最後の回。成績ファイルがまだでもページは作る)
   workflow_dispatch:
 
 permissions:
@@ -18,7 +22,32 @@ env:
   PYTHONUTF8: "1"
 
 jobs:
+  gate:
+    # 昨日の成績まで取り込み済みなら何もしない。まだなら、公式サイトに昨日の成績ファイルが出ているか見る
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.c.outputs.run }}
+    steps:
+      - id: c
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "run=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          Y=$(date -d yesterday +%F)
+          L=$(curl -sf "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/data/status.json" \
+                -H "Authorization: Bearer ${{ github.token }}" | python3 -c "import json,sys;print(json.load(sys.stdin).get('db_last',''))" || true)
+          echo "DB の最終日: ${L:-?} / 昨日: $Y"
+          if [ -n "$L" ] && ! [ "$L" \< "$Y" ]; then echo "昨日まで取り込み済み"; exit 0; fi
+          U="https://www1.mbrace.or.jp/od2/K/$(date -d yesterday +%Y%m)/k$(date -d yesterday +%y%m%d).lzh"
+          if curl -sf -m 60 -A "Mozilla/5.0 (personal research; low-rate downloader)" -r 0-15 "$U" | grep -q -- "-lh"; then
+            echo "昨日の成績ファイルが出ています: $U"; echo "run=1" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "0 0 * * *" ]; then
+            echo "最後の回なので、成績ファイルがまだでも予想ページを作ります"; echo "run=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "昨日の成績ファイルはまだです。次の回に見ます"
+          fi
+
   page:
+    needs: gate
+    if: needs.gate.outputs.run == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -58,10 +87,37 @@ jobs:
           if [ ! -s boatrace.sqlite ]; then python analysis/yosou.py setup; fi
 
       - name: 取り込み・昨日の答え合わせ・(月曜は)先週の振り返り
-        # モデルが無いときだけここで学習する。7日ごとの学習し直しはページを出したあとにする
+        # 学習は次のステップでする (モデルが無いときだけここで学習する)
         run: |
           if [ -f model/win.txt ]; then R=100000; else R=0; fi
           python analysis/yosou.py daily --retrain-days $R
+
+      - name: 毎日、昨日までのデータで学習し直す (今日の予想から使う)
+        # 直近2年で学習し直す (CPU で10分ほど)。別の場所に作ってから入れ替えるので、
+        # 失敗しても前のモデルのまま予想・ページ作りを続ける
+        continue-on-error: true
+        run: |
+          AGE=$(python - <<'PY'
+          import datetime as dt, json, os, sys
+          sys.path.insert(0, "analysis")
+          import yosou
+          p = "model/trained.json"
+          if not os.path.exists(p):
+              print(999)
+          else:
+              end = json.load(open(p, encoding="utf-8"))["data_end"]
+              print((dt.date.fromisoformat(yosou.last_date("boatrace.sqlite")) - dt.date.fromisoformat(end)).days)
+          PY
+          )
+          echo "前回の学習から ${AGE} 日 (データの最終日との差)"
+          if [ "$AGE" -ge 1 ]; then
+            rm -rf model.new
+            python analysis/yosou.py train --model model.new
+            rm -rf model && mv model.new model
+            cat model/trained.json
+          else
+            echo "モデルは最新のデータまで学習済み"
+          fi
 
       - name: 今日から1週間 (番組表が出ている日) の予想
         # 前の日の 16:00 (note-daily) に Note 記事で出した今日の予想があれば、そのレースはその予想を残す
@@ -96,20 +152,3 @@ jobs:
           git add -A
           git commit -q -m "予想 $(date +%F)" || echo "変更なし"
           git push origin gh-pages
-
-      - name: 7日ごとに学習し直す (次の日の予想から使う)
-        run: |
-          AGE=$(python - <<'PY'
-          import datetime as dt, json, os, sys
-          sys.path.insert(0, "analysis")
-          import yosou
-          p = "model/trained.json"
-          if not os.path.exists(p):
-              print(999)
-          else:
-              end = json.load(open(p, encoding="utf-8"))["data_end"]
-              print((dt.date.fromisoformat(yosou.last_date("boatrace.sqlite")) - dt.date.fromisoformat(end)).days)
-          PY
-          )
-          echo "前回の学習から ${AGE} 日"
-          if [ "$AGE" -ge 7 ]; then python analysis/yosou.py train; fi

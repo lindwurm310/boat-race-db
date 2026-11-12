@@ -6,7 +6,7 @@
   python analysis/yosou.py predict --date 2026-10-26   番組表を取得してその日の全レースを予想
   python analysis/yosou.py live                  締切30分以内のレースの直前情報とオッズを取って、おすすめの買い目を表示
   python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因・3連単/3連複の買い方ごとの収支を集計 (当日は結果ページから)
-  python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 7日ごとに学習し直す
+  python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 毎日学習し直す
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
@@ -832,7 +832,7 @@ def cmd_backtest(a):
 
 # ---------------- daily: 結果の取り込み → 答え合わせ → 再学習 ----------------
 def cmd_daily(a):
-    """毎日1回。昨日までの成績を DB に取り込み、昨日の予想を答え合わせし、7日ごとにモデルを学習し直す。"""
+    """毎日1回。昨日までの成績を DB に取り込み、昨日の予想を答え合わせし、新しいデータがあればモデルを学習し直す。"""
     cmd_update(a)
     yday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
     if os.path.exists(day_path(yday, ".csv")):
@@ -884,7 +884,7 @@ def main():
     ap.add_argument("--within", type=int, default=30, help="live: 締切まで何分以内のレースを見るか")
     ap.add_argument("--all", action="store_true", help="live: その日の全レースを見る (時間がかかる)")
     ap.add_argument("--race", help="live: 1レースだけ。場コード-レース番号 (例: 01-12)")
-    ap.add_argument("--retrain-days", type=int, default=7, help="daily: 何日ごとに学習し直すか")
+    ap.add_argument("--retrain-days", type=int, default=1, help="daily: 何日ごとに学習し直すか (既定: 毎日)")
     ap.add_argument("--no", type=int, help="racer: 登録番号")
     ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
