@@ -21,6 +21,8 @@ from predict import history, history_window, parse_st
 
 def add_meta(db, df):
     """features() の行に day_no・motor_no・boat_no・meeting を付ける。"""
+    if "day_no" in df.columns:  # predict.load() が読むようになった
+        return df
     import sqlite3
     con = sqlite3.connect(db)
     lo, hi = df.race_id.min(), df.race_id.max()
@@ -50,7 +52,11 @@ def period_id(df, col):
 
 
 def add(df):
-    """df: features() の結果に add_meta() を付けたもの。追加の列の名前のリストを返す。"""
+    """df: features() の結果に add_meta() を付けたもの。追加の列の名前のリストを返す。
+    今は predict.features() が同じ列 (predict.MOTOR_MEET) を作るので、そのときは名前だけ返す。"""
+    from predict import MOTOR_MEET
+    if "motor_w" in df.columns:
+        return list(MOTOR_MEET)
     done = df["finish_raw"].notna()
     lane_base = df[done].groupby("lane")["win"].mean()
     t3_base = df[done].assign(t3=df["finish"] <= 3).groupby("lane")["t3"].mean()
