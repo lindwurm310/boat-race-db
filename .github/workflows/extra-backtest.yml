@@ -1,0 +1,48 @@
+name: extra-backtest
+# 検証用: 追加の情報を足したモデルのバックテスト (analysis/extra/extra_bt.py)。公式サイトにはアクセスしない。
+# 1年ずつ別のジョブで動かし、結果を Release bi-history に extra_<set>_<年>.tar.gz で置く。
+on:
+  workflow_dispatch:
+    inputs:
+      set:
+        description: morning / late
+        default: morning
+      years:
+        description: 何年分
+        default: "5"
+      only:
+        description: "年の番号 (0 = 一番古い年) を JSON の配列で"
+        default: "[0,1,2,3,4]"
+permissions:
+  contents: write
+jobs:
+  bt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        i: ${{ fromJson(inputs.only) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python analysis/yosou.py setup --db boatrace.sqlite
+      - name: 直前情報 (late のとき)
+        if: inputs.set == 'late'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir bi && gh release download bi-history --repo ${{ github.repository }} -p 'bi_*.jsonl.gz' -D bi
+          python analysis/extra/parse_beforeinfo.py bi/*.jsonl.gz --out beforeinfo.csv.gz
+      - run: python analysis/extra/extra_bt.py --db boatrace.sqlite --years ${{ inputs.years }} --only ${{ matrix.i }} --set ${{ inputs.set }} ${{ inputs.set == 'late' && '--bi beforeinfo.csv.gz' || '' }} --out out
+      - name: 結果を置く
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f out/corr_*.pkl.gz; for f in out/corr_*.pkl; do [ -f "$f" ] && gzip "$f"; done
+          tar czf extra_${{ inputs.set }}_${{ matrix.i }}.tar.gz out
+          gh release upload bi-history extra_${{ inputs.set }}_${{ matrix.i }}.tar.gz --repo ${{ github.repository }} --clobber

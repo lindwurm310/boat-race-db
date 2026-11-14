@@ -71,6 +71,8 @@ def build(a, start, end):
 def run(a):
     end = dt.date.fromisoformat(last_date(a.db))
     ps = list(periods(end, a.years))
+    if a.only is not None:  # この1年だけ (0 = 一番古い年)
+        ps = [ps[a.only]]
     start = ps[0][0] - dt.timedelta(days=a.days + HISTORY_DAYS)
     print(f"読み込み {start}〜{end}", flush=True)
     df, new = build(a, start, end)
@@ -142,6 +144,7 @@ if __name__ == "__main__":
     ap.add_argument("--days", type=int, default=730)
     ap.add_argument("--set", choices=["morning", "late"], default="morning")
     ap.add_argument("--bi", help="parse_beforeinfo.py の出力 (late のとき)")
+    ap.add_argument("--only", type=int, help="--years 年のうち、この番目の1年だけ (0 = 一番古い年)")
     ap.add_argument("--models", help="この名前のモデルだけ (カンマ区切り)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
