@@ -33,3 +33,8 @@
 #byosou-panel .byosou-go:disabled { opacity: .4; cursor: default; }
 #byosou-panel .byosou-reset { padding: 3px 8px; border: 1px solid #999; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
 #byosou-panel .byosou-log { margin-top: 4px; color: #a00; }
+
+/* テレボートのログイン画面: 自動ログイン用の暗証番号 */
+#byosou-pinbox { position: fixed; left: 12px; bottom: 12px; z-index: 2147483647; background: #fff; border: 1px solid #1b3c78; border-radius: 6px; padding: 6px 10px; font: 12px "Meiryo", sans-serif; color: #222; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+#byosou-pinbox input { width: 90px; padding: 2px 4px; }
+#byosou-pinbox span { color: #1b3c78; margin-left: 4px; }
