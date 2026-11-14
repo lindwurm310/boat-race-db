@@ -26,3 +26,16 @@
 #byosou-panel td.byosou-lane4 { background: #0068b7; color: #fff; }
 #byosou-panel td.byosou-lane5 { background: #fff100; color: #000; }
 #byosou-panel td.byosou-lane6 { background: #00a33e; color: #fff; }
+
+/* テレボートの投票画面 */
+#byosou-panel.byosou-teleboat { width: 420px; left: 12px; right: auto; }
+#byosou-panel .byosou-go { margin: 8px 6px 4px 0; padding: 6px 16px; border: 0; border-radius: 4px; background: #c00; color: #fff; font: bold 14px "Meiryo", sans-serif; cursor: pointer; }
+#byosou-panel .byosou-go:disabled { opacity: .4; cursor: default; }
+#byosou-panel .byosou-reset { padding: 3px 8px; border: 1px solid #999; border-radius: 4px; background: #fff; font: inherit; cursor: pointer; }
+#byosou-panel .byosou-log { margin-top: 4px; color: #a00; }
+
+/* テレボートのログイン画面: 自動ログイン用の暗証番号 */
+#byosou-pinbox { position: fixed; left: 12px; bottom: 12px; z-index: 2147483647; background: #fff; border: 1px solid #1b3c78; border-radius: 6px; padding: 6px 10px; font: 12px "Meiryo", sans-serif; color: #222; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+#byosou-pinbox input { width: 90px; padding: 2px 4px; }
+#byosou-pinbox span { color: #1b3c78; margin-left: 4px; }
+#byosou-pinbox label { display: inline-block; margin: 2px 0; } #byosou-pinbox label input { width: 110px; }
