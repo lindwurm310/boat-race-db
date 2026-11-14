@@ -81,7 +81,7 @@ def main():
             rid = f"{x['d'].replace('-', '')}-{x['j']:02d}-{x['r']:02d}"
             for r in parse(x["h"]):
                 out.append(dict(race_id=rid, **r))
-    df = pd.DataFrame(out)
+    df = pd.DataFrame(out).drop_duplicates(["race_id", "lane"], keep="last")
     df.to_csv(a.out, index=False)
     print(len(df), "行", df.race_id.nunique(), "レース")
     print(df.describe().T[["count", "mean", "min", "max"]])
