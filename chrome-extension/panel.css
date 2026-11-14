@@ -38,3 +38,4 @@
 #byosou-pinbox { position: fixed; left: 12px; bottom: 12px; z-index: 2147483647; background: #fff; border: 1px solid #1b3c78; border-radius: 6px; padding: 6px 10px; font: 12px "Meiryo", sans-serif; color: #222; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
 #byosou-pinbox input { width: 90px; padding: 2px 4px; }
 #byosou-pinbox span { color: #1b3c78; margin-left: 4px; }
+#byosou-pinbox label { display: inline-block; margin: 2px 0; } #byosou-pinbox label input { width: 110px; }
