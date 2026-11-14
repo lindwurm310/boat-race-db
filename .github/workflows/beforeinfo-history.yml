@@ -1,0 +1,44 @@
+name: beforeinfo-history
+# 検証用: 過去の直前情報 (スタート展示・チルト・体重・部品交換) を集める。analysis/extra/run.json を変えて push すると動く。
+# 1ジョブは1秒に1回までアクセス。同時に動かすのは run.json の parallel 個まで。
+on:
+  push:
+    branches: [claude/project-thread-0rd6pc]
+    paths: [analysis/extra/run.json]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.p.outputs.chunks }}
+      parallel: ${{ steps.p.outputs.parallel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          echo "chunks=$(jq -c .chunks analysis/extra/run.json)" >> "$GITHUB_OUTPUT"
+          echo "parallel=$(jq -c .parallel analysis/extra/run.json)" >> "$GITHUB_OUTPUT"
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      max-parallel: ${{ fromJson(needs.plan.outputs.parallel) }}
+      fail-fast: false
+      matrix:
+        c: ${{ fromJson(needs.plan.outputs.chunks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas
+      - run: python analysis/extra/collect_beforeinfo.py --races analysis/extra/races_2021-10-25.csv.gz --start ${{ matrix.c.s }} --end ${{ matrix.c.e }} --out bi_${{ matrix.c.s }}.jsonl.gz ${{ matrix.c.limit && format('--limit {0}', matrix.c.limit) || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bi_${{ matrix.c.s }}
+          path: bi_${{ matrix.c.s }}.jsonl.gz
+          retention-days: 30
