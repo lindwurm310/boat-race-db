@@ -1,12 +1,19 @@
-// テレボート (ib.mbrace.or.jp) の投票画面に、今日の予想の単勝買い目をベットリストへ入れるパネルを出す。
-// 入れるのはベットリストまで。「投票入力完了」と投票用パスワード・購入は、必ず自分で行う。
+// テレボート (ib.mbrace.or.jp) の投票画面に、今日の予想の単勝買い目のパネルを出す。
+// 「全自動」がオンなら、画面を開いたときに 不足分の入金 → ベットリストに入れる → 投票入力完了 → 購入 まで行う
+// (1日の上限 DAY_CAP 円まで。入金・購入には自動ログイン欄で保存した投票用パスワードを使う)。
 (() => {
-  if (!document.getElementById("betkati1") && !document.getElementById("boatraceTitle")) return; // 投票画面以外では出さない
+  const CONFIRM_KEY = "byosou-confirm"; // 自動で「投票入力完了」を押したときの点数・合計 (購入確認画面で照合する)
+  if (/\/betconf/.test(location.pathname) || (!document.getElementById("betkati1") && !document.getElementById("boatraceTitle"))) {
+    confirmPage();
+    return;
+  }
 
   const STAKE = 100;      // 1点の金額 (円)
   const DAY_CAP = 4000;   // 1日の上限 (円)。購入限度額 (残高) が少ないときはそちらに合わせる
   const MARGIN_MIN = 3;   // 締切まで3分を切ったレースは入れない
   const DONE_KEY = "byosou-teleboat-done-"; // 今日ベットリストに入れた買い目 (二重に入れないため)
+  const DEP_KEY = "byosou-teleboat-deposit-"; // 今日自動で入金した金額
+  const AUTO_KEY = "byosou-auto-tried-";      // このウィンドウで今日の全自動を始めたか (失敗したときに繰り返さない)
 
   const panel = el("div", {id: "byosou-panel", className: "byosou-teleboat"});
   const head = el("div", {className: "byosou-head"});
@@ -23,7 +30,12 @@
   };
   reload.onclick = load;
   let running = false;
-  load();
+  let lastAll = [];
+  let settings = {auto: true, betPassword: ""};
+  chrome.storage.local.get(["teleboat_auto", "teleboat_betPassword"], (v) => {
+    settings = {auto: v.teleboat_auto !== false, betPassword: v.teleboat_betPassword || ""};
+    load();
+  });
 
   function today() {
     const d = new Date();
@@ -92,7 +104,8 @@
         body.replaceChildren(msg(`今日 (${today()}) の予想が読めませんでした。予想ページに今日の予想が出てから「更新」を押してください。`));
         return;
       }
-      show(plan(picks(res.body.rows || [])));
+      lastAll = picks(res.body.rows || []);
+      show(plan(lastAll));
     });
   }
 
@@ -119,9 +132,92 @@
       try { localStorage.removeItem(DONE_KEY + today()); } catch { /* なし */ }
       load();
     };
-    parts.push(go, reset, log, el("div", {className: "byosou-help", textContent:
-      "入れるのはベットリストまでです。中身と合計金額を確かめてから、自分で「投票入力完了」を押し、投票用パスワードを入れて購入してください。"}));
+    const autoBox = el("label", {className: "byosou-auto"});
+    const autoChk = el("input", {type: "checkbox", checked: settings.auto});
+    autoChk.onchange = () => { settings.auto = autoChk.checked; chrome.storage.local.set({teleboat_auto: autoChk.checked}); };
+    autoBox.append(autoChk, document.createTextNode(" 全自動 (開いたときに入金・購入まで行う)"));
+    parts.push(go, reset, autoBox, log, el("div", {className: "byosou-help", textContent: settings.auto
+      ? (settings.betPassword ? "全自動: 不足分を入金し、ベットリストに入れて購入まで行います。" : "全自動には投票用パスワードが要ります。ログイン画面の「自動ログイン」欄で保存してください。")
+      : "入れるのはベットリストまでです。中身と合計金額を確かめてから、自分で「投票入力完了」を押し、投票用パスワードを入れて購入してください。"}));
     body.replaceChildren(...parts);
+    let tried = false;
+    try { tried = sessionStorage.getItem(AUTO_KEY + today()) === "1"; } catch { /* なし */ }
+    if (settings.auto && settings.betPassword && p.buy.length && !tried && !running) {
+      try { sessionStorage.setItem(AUTO_KEY + today(), "1"); } catch { /* なし */ }
+      setTimeout(() => autoRun(p, go, log), 1500);
+    }
+  }
+
+  // ---- 全自動: 入金 → ベットリスト → 投票入力完了 ----
+  async function autoRun(p, go, log) {
+    const say = (t) => log.append(el("div", {textContent: t}));
+    try {
+      const need = p.buy.length * STAKE;
+      const lim = limitYen();
+      if (lim === null) throw new Error("購入限度額が読めません");
+      if (lim < need) {
+        let depToday = 0;
+        try { depToday = +localStorage.getItem(DEP_KEY + today()) || 0; } catch { /* なし */ }
+        const room = Math.floor((DAY_CAP - depToday) / 1000) * 1000;
+        const dep = Math.min(Math.ceil((need - lim) / 1000) * 1000, room);
+        if (dep > 0) {
+          say(`残高 ${lim.toLocaleString()}円 が足りないので ${dep.toLocaleString()}円 を入金します…`);
+          await deposit(dep);
+          try { localStorage.setItem(DEP_KEY + today(), String(depToday + dep)); } catch { /* なし */ }
+          say("入金を指示しました。残高に反映されるのを待っています…");
+          await waitBalance(Math.min(need, lim + dep));
+        }
+        p = plan(lastAll); // 残高に合わせて買い目を選び直す
+        show(p); // 表を描き直す (自動はもう始めたので繰り返さない)
+        log = body.querySelector(".byosou-log"); go = body.querySelector(".byosou-go");
+      }
+      if (!p.buy.length) { say("残高が無いので購入しませんでした"); return; }
+      const ok = await run(p.buy, go, log);
+      if (!ok) throw new Error("ベットリストに1点も入りませんでした");
+      const count = betCount(), total = totalAmount();
+      if (total > DAY_CAP) throw new Error(`合計 ${total}円 が上限を超えるので購入をやめました`);
+      try { sessionStorage.setItem(CONFIRM_KEY, JSON.stringify({date: today(), count, total})); } catch { /* なし */ }
+      say(`${count}点・${total.toLocaleString()}円 を購入します…`);
+      const submit = await waitFor(() => {
+        const b = document.querySelector("#betList .btnSubmit");
+        return b && !b.classList.contains("off") ? b.querySelector("a") : null;
+      }, "「投票入力完了」が押せません");
+      submit.click();
+    } catch (e) {
+      log.append(el("div", {className: "byosou-verdict", textContent: `全自動を止めました: ${e.message}`}));
+    }
+  }
+
+  async function deposit(amount) {
+    const menu = await waitFor(() => document.querySelector("#charge a"), "「入金する」のメニューがありません");
+    menu.click();
+    const amt = await waitFor(() => visible(document.querySelectorAll("#chargeInstructAmt")), "入金の画面が開きません");
+    setValue(amt, String(amount / 1000)); // 欄は1,000円単位 (「000円」が後ろに付く)
+    setValue(await waitFor(() => visible(document.querySelectorAll("#chargeBetPassword")), "投票用パスワードの欄がありません"), settings.betPassword);
+    await sleep(300);
+    document.querySelector("#executeCharge a").click();
+    await waitFor(() => {
+      if (document.getElementById("closeChargecomp")) return true;
+      const err = document.querySelector("#errorPop .errorTxt");
+      if (err) throw new Error(`入金できませんでした: ${err.textContent.trim()}`);
+      return false;
+    }, "入金の結果が出ません", 30000);
+    document.querySelector("#closeChargecomp a").click();
+    await sleep(500);
+  }
+
+  async function waitBalance(target) {
+    for (let i = 0; i < 60; i++) { // 30秒ごとに最大30分
+      if ((limitYen() || 0) >= target) return;
+      const b = document.querySelector("#updateBalanceBtn a"); if (b) b.click();
+      await sleep(30000);
+    }
+    if ((limitYen() || 0) < STAKE) throw new Error("30分待っても入金が残高に反映されませんでした");
+  }
+
+  function totalAmount() {
+    const s = document.getElementById("totalAmount");
+    return s ? parseInt(s.textContent.replace(/[^0-9]/g, ""), 10) || 0 : 0;
   }
 
   function table(list) {
@@ -142,8 +238,8 @@
   }
 
   async function run(list, go, log) {
-    if (running) return;
-    running = true; go.disabled = true; reload.disabled = true;
+    if (running) return 0;
+    running = true; if (go) go.disabled = true; reload.disabled = true;
     let ok = 0;
     for (const p of list) {
       const cell = document.querySelector(`#byosou-row-${CSS.escape(p.key)} td:last-child`);
@@ -159,8 +255,9 @@
       }
     }
     log.prepend(el("div", {className: "byosou-verdict", textContent:
-      `${ok}点 (${(ok * STAKE).toLocaleString()}円) をベットリストに入れました。右のベットリストを確かめて「投票入力完了」へ。`}));
+      `${ok}点 (${(ok * STAKE).toLocaleString()}円) をベットリストに入れました。`}));
     running = false; reload.disabled = false;
+    return ok;
   }
 
   // ---- テレボートの画面操作 ----
@@ -249,6 +346,34 @@
       if (Date.now() - t0 > ms) throw new Error(err);
       await sleep(150);
     }
+  }
+
+  // ---- 購入確認画面: 全自動で「投票入力完了」を押したときだけ、点数・合計を照合して購入する ----
+  function confirmPage() {
+    let want = null;
+    try { want = JSON.parse(sessionStorage.getItem(CONFIRM_KEY) || "null"); } catch { /* なし */ }
+    if (!want || want.date !== today()) return;
+    try { sessionStorage.removeItem(CONFIRM_KEY); } catch { /* なし */ }
+    chrome.storage.local.get("teleboat_betPassword", async (v) => {
+      const box = el("div", {id: "byosou-panel", className: "byosou-teleboat"});
+      const say = (t) => box.append(el("div", {className: "byosou-msg", textContent: t}));
+      document.body.append(box);
+      try {
+        const pw = await waitFor(() => [...document.querySelectorAll("input[type=password]")].find((n) => n.offsetParent !== null), "投票用パスワードの欄がありません");
+        const text = document.body.innerText.replace(/\s/g, "");
+        if (!text.includes(want.total.toLocaleString())) throw new Error(`合計 ${want.total.toLocaleString()}円 が画面に見当たりません`);
+        if (want.total > 4000) throw new Error("上限を超えています");
+        setValue(pw, v.teleboat_betPassword || "");
+        await sleep(300);
+        const buy = [...document.querySelectorAll("a, input[type=submit], input[type=button], button")]
+          .find((n) => n.offsetParent !== null && /^投票(する|確定)$/.test((n.value || n.textContent || "").trim()));
+        if (!buy) throw new Error("「投票する」ボタンが見つかりません");
+        say(`${want.count}点・${want.total.toLocaleString()}円 を購入します`);
+        buy.click();
+      } catch (e) {
+        say(`自動購入を止めました: ${e.message}`);
+      }
+    });
   }
 
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

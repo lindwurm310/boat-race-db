@@ -14,7 +14,8 @@
   const FIELDS = [["memberNo", "加入者番号", "tel"], ["pin", "暗証番号", "password"], ["authPassword", "認証用パスワード", "password"]];
   const box = document.createElement("div");
   box.id = "byosou-pinbox";
-  box.innerHTML = "<b>自動ログイン</b><br>" + FIELDS.map(([id, label, type]) =>
+  const BOX_FIELDS = FIELDS.concat([["betPassword", "投票用パスワード (入金・購入用)", "password"]]);
+  box.innerHTML = "<b>自動ログイン・自動購入</b><br>" + BOX_FIELDS.map(([id, label, type]) =>
     `<label>${label} <input data-id="${id}" type="${type}" class="inputPass" autocomplete="off" maxlength="10"></label>`).join("<br>") +
     '<br><button type="button" data-a="save">保存</button> <button type="button" data-a="del">全部消す</button> <span></span>';
   document.body.append(box);
@@ -34,11 +35,12 @@
     });
   };
   box.querySelector('[data-a="del"]').onclick = () => {
-    chrome.storage.local.remove(FIELDS.map(([id]) => STORE_KEY + id).concat(["teleboatPin"]), () => { showSaved(); });
+    if (!confirm("保存したログイン情報と投票用パスワードを全部消しますか?")) return;
+    chrome.storage.local.remove(BOX_FIELDS.map(([id]) => STORE_KEY + id).concat(["teleboatPin"]), () => { showSaved(); });
   };
   function showSaved() {
     chrome.storage.local.get(null, (v) => {
-      const have = FIELDS.filter(([id]) => v[STORE_KEY + id]).map(([, l]) => l);
+      const have = BOX_FIELDS.filter(([id]) => v[STORE_KEY + id]).map(([, l]) => l.replace(/ \(.*\)/, ""));
       note.textContent = have.length ? `保存済み: ${have.join("・")}` : "未保存";
     });
   }
