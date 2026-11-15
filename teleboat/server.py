@@ -209,8 +209,12 @@ def make_handler(app):
             return False, None
 
         def guard(self):
-            if not private(self.client_address[0]):
-                self.send(403, {"error": "家のネットワークの外からは使えません"})
+            ip = self.client_address[0]
+            if ip.startswith("::ffff:"):  # IPv4 を IPv6 の形で受けたとき
+                ip = ip[7:]
+            if not private(ip):
+                app.log(f"家のネットワークと Tailscale の外 ({ip}) からの接続を断りました")
+                self.send(403, {"error": f"家のネットワークと Tailscale の外からは使えません (接続元 {ip})"})
                 return None
             u = urlparse(self.path)
             q = parse_qs(u.query)
