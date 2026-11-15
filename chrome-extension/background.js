@@ -23,3 +23,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     .catch(() => sendResponse({ok: false}));
   return true;
 });
+
+// 拡張機能のファイルが入れ替わったら (update_extension.ps1)、自分で読み込み直す。1分ごとに manifest.json の版を見る。
+chrome.alarms.create("selfReload", {periodInMinutes: 1});
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== "selfReload") return;
+  fetch(chrome.runtime.getURL("manifest.json"), {cache: "no-store"})
+    .then((r) => r.json())
+    .then((m) => { if (m.version !== chrome.runtime.getManifest().version) chrome.runtime.reload(); })
+    .catch(() => {});
+});

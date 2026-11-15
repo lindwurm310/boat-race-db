@@ -39,6 +39,7 @@ $("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).the
 $("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
 chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
 
+$("ver").textContent = "v" + chrome.runtime.getManifest().version;
 refresh();
 showLog();
   });
@@ -59,6 +60,7 @@ $("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).the
 $("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
 chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
 
+$("ver").textContent = "v" + chrome.runtime.getManifest().version;
 refresh();
 showLog();
   });
@@ -75,5 +77,6 @@ $("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).the
 $("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
 chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
 
+$("ver").textContent = "v" + chrome.runtime.getManifest().version;
 refresh();
 showLog();
