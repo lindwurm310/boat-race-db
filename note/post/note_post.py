@@ -199,7 +199,7 @@ def post(dry):
     if j.get("date") != date:
         return f"SKIP {date} 明日の記事がまだできていない（latest.json は {j.get('date')}）"
     url = already_published(j["title"])
-    if url:
+    if url and not (dry and os.environ.get("NOTE_FORCE") == "1"):  # 試運転だけ NOTE_FORCE=1 で重複チェックを飛ばせる
         return f"OK {date} {url}"
     body = article_body(j["html"])
     img = os.path.join(HERE, "header.png")
