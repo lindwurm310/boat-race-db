@@ -108,6 +108,14 @@ def load_settings():
     return out
 
 
+def new_token():
+    with _lock:
+        d = _read()
+        d["token"] = secrets.token_urlsafe(16)
+        _write(d)
+        return d["token"]
+
+
 def get_secret(key):
     return _unprotect(_read().get("secret_" + key, ""))
 

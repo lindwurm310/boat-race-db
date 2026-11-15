@@ -106,6 +106,7 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
         <button class="primary" id="save">保存</button>
         <button id="clearSecrets">ログイン情報を消す</button>
         <button id="resetAuto">今日の自動実行をもう一度できるようにする</button>
+        <button id="newToken">合言葉を作り直す</button>
       </div>
       <div class="msg" id="setMsg"></div>
     </details>
@@ -197,6 +198,17 @@ $("clearSecrets").onclick = async () => {
   await api("/api/settings", {clear_secrets: true}); filled = false; $("setMsg").textContent = "消しました";
 };
 $("resetAuto").onclick = async () => { await api("/api/reset_today", {}); $("setMsg").textContent = "今日の自動実行をもう一度できるようにしました"; };
+$("newToken").onclick = async () => {
+  if (!confirm("合言葉を作り直しますか？ 前の URL は使えなくなります（このブラウザはそのまま使えます）。")) return;
+  try {
+    const r = await api("/api/new_token", {});
+    const url = location.origin + "/?t=" + r.token;
+    history.replaceState(null, "", "/");
+    $("setMsg").textContent = "作り直しました。ほかの端末で開くときの新しい URL: " + url;
+  } catch (e) { $("setMsg").textContent = "できませんでした: " + e.message; }
+};
+// 合言葉付きの URL で開いたら、アドレス欄から合言葉を消す (ブラウザが覚えたので要らない)
+if (location.search.includes("t=")) history.replaceState(null, "", "/");
 refresh(); loadPlan();
 </script>
 </body>

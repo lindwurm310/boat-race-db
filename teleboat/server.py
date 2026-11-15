@@ -297,6 +297,14 @@ def make_handler(app):
                     store.save_settings(body)
                     app.log("設定を保存しました")
                     self.send(200, {"ok": True})
+                elif u.path == "/api/new_token":
+                    # 合言葉を作り直す。このブラウザには新しい合言葉を覚えさせ、デスクトップの URL も書き直す
+                    tok = store.new_token()
+                    secure = "; Secure" if self.headers.get("Tailscale-Funnel-Request") or self.headers.get("X-Forwarded-Proto") == "https" else ""
+                    write_urls(app)
+                    app.log("合言葉を作り直しました (前の URL は使えなくなりました)")
+                    self.send(200, {"ok": True, "token": tok},
+                              extra={"Set-Cookie": f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{secure}"})
                 elif u.path == "/api/reset_today":
                     st = store.load_state()
                     st["auto_ran"] = False
@@ -367,14 +375,13 @@ def write_shortcut(url):
         pass
 
 
-def main():
-    app = App()
+def write_urls(app, first=False):
     s = store.load_settings()
     port = s["port"]
-    srv = ThreadingHTTPServer(("0.0.0.0", port), make_handler(app))
     url = f"http://{lan_ip()}:{port}/?t={s['token']}"
     write_shortcut(url)
-    app.log(f"操作画面を開きました: http://{lan_ip()}:{port}/ (合言葉付きの URL はデスクトップの「iPad用の自動投票.url」)")
+    if first:
+        app.log(f"操作画面を開きました: http://{lan_ip()}:{port}/ (合言葉付きの URL はデスクトップの「iPad用の自動投票.url」)")
     ts = tailscale_ip()
     dns = tailscale_dns()
     if dns:  # Tailscale Funnel (インターネットから https で届く) を使うときの URL
@@ -391,7 +398,16 @@ def main():
                     f.write(f"[InternetShortcut]\nURL={out}\n")
         except OSError:
             pass
-        app.log(f"外出先からは {out.split('?')[0]} (合言葉付きの URL はデスクトップの「外出先用の自動投票.url」)")
+        if first:
+            app.log(f"外出先からは {out.split('?')[0]} (合言葉付きの URL はデスクトップの「外出先用の自動投票.url」)")
+
+
+def main():
+    app = App()
+    s = store.load_settings()
+    port = s["port"]
+    srv = ThreadingHTTPServer(("0.0.0.0", port), make_handler(app))
+    write_urls(app, first=True)
     threading.Thread(target=app.scheduler, daemon=True).start()
     srv.serve_forever()
 
