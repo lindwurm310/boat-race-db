@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ボートレース予想",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "ボートレース予想の操作画面を開くボタンと、boatrace.jp のレースのページにおすすめの買い目を出すパネル。テレボートの投票画面では今日の単勝買い目をベットリストに入れる。",
   "icons": {
     "16": "icon16.png",
@@ -9,7 +9,7 @@
     "128": "icon128.png"
   },
   "action": {
-    "default_title": "ボートレース予想の操作画面を開く",
+    "default_title": "ボートレース予想の設定（テレボートのログイン情報・全自動）",
     "default_icon": {
       "16": "icon16.png",
       "48": "icon48.png"
@@ -61,5 +61,6 @@
   ],
   "permissions": [
     "storage"
-  ]
+  ],
+  "options_page": "options.html"
 }

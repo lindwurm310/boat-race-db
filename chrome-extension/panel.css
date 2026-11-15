@@ -40,3 +40,4 @@
 #byosou-pinbox span { color: #1b3c78; margin-left: 4px; }
 #byosou-pinbox label { display: inline-block; margin: 2px 0; } #byosou-pinbox label input { width: 110px; }
 #byosou-panel .byosou-auto { display: block; margin: 6px 0 2px; font-weight: bold; color: #c00; }
+#byosou-pinbox button { margin-left: 6px; padding: 2px 10px; border: 0; border-radius: 3px; background: #1b3c78; color: #fff; cursor: pointer; font: inherit; }

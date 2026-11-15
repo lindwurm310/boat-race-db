@@ -10,8 +10,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // sendResponse を後で呼ぶ
 });
 
-// ツールバーのボタン: 操作画面 (今日の予想・答え合わせ・振り返り・学習など) を開く
-chrome.action.onClicked.addListener(() => chrome.tabs.create({url: `${SERVER}/`}));
+// ツールバーのボタン: 設定画面を開く (操作画面・テレボートへのリンクもそこにある)
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+chrome.runtime.onMessage.addListener((msg) => { if (msg.type === "openOptions") chrome.runtime.openOptionsPage(); });
 
 // テレボートの投票画面用: 予想ページ (GitHub Pages) からその日の予想を読む
 const PAGES = "https://lindwurm310.github.io/boat-race-db";

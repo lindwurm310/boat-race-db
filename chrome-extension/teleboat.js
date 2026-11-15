@@ -8,8 +8,8 @@
     return;
   }
 
-  const STAKE = 100;      // 1点の金額 (円)
-  const DAY_CAP = 4000;   // 1日の上限 (円)。購入限度額 (残高) が少ないときはそちらに合わせる
+  let STAKE = 100;        // 1点の金額 (円)。設定画面で変えられる
+  let DAY_CAP = 4000;     // 1日の上限 (円)。購入限度額 (残高) が少ないときはそちらに合わせる。設定画面で変えられる
   const MARGIN_MIN = 3;   // 締切まで3分を切ったレースは入れない
   const DONE_KEY = "byosou-teleboat-done-"; // 今日ベットリストに入れた買い目 (二重に入れないため)
   const DEP_KEY = "byosou-teleboat-deposit-"; // 今日自動で入金した金額
@@ -32,8 +32,10 @@
   let running = false;
   let lastAll = [];
   let settings = {auto: true, betPassword: ""};
-  chrome.storage.local.get(["teleboat_auto", "teleboat_betPassword"], (v) => {
+  chrome.storage.local.get(["teleboat_auto", "teleboat_betPassword", "teleboat_stake", "teleboat_cap"], (v) => {
     settings = {auto: v.teleboat_auto !== false, betPassword: v.teleboat_betPassword || ""};
+    if (v.teleboat_stake >= 100) STAKE = v.teleboat_stake;
+    if (v.teleboat_cap >= STAKE) DAY_CAP = v.teleboat_cap;
     load();
   });
 
@@ -137,7 +139,7 @@
     autoChk.onchange = () => { settings.auto = autoChk.checked; chrome.storage.local.set({teleboat_auto: autoChk.checked}); };
     autoBox.append(autoChk, document.createTextNode(" 全自動 (開いたときに入金・購入まで行う)"));
     parts.push(go, reset, autoBox, log, el("div", {className: "byosou-help", textContent: settings.auto
-      ? (settings.betPassword ? "全自動: 不足分を入金し、ベットリストに入れて購入まで行います。" : "全自動には投票用パスワードが要ります。ログイン画面の「自動ログイン」欄で保存してください。")
+      ? (settings.betPassword ? "全自動: 不足分を入金し、ベットリストに入れて購入まで行います。" : "全自動には投票用パスワードが要ります。拡張機能のアイコンから設定画面を開いて保存してください。")
       : "入れるのはベットリストまでです。中身と合計金額を確かめてから、自分で「投票入力完了」を押し、投票用パスワードを入れて購入してください。"}));
     body.replaceChildren(...parts);
     let tried = false;
@@ -176,7 +178,7 @@
       if (!ok) throw new Error("ベットリストに1点も入りませんでした");
       const count = betCount(), total = totalAmount();
       if (total > DAY_CAP) throw new Error(`合計 ${total}円 が上限を超えるので購入をやめました`);
-      try { sessionStorage.setItem(CONFIRM_KEY, JSON.stringify({date: today(), count, total})); } catch { /* なし */ }
+      try { sessionStorage.setItem(CONFIRM_KEY, JSON.stringify({date: today(), count, total, cap: DAY_CAP})); } catch { /* なし */ }
       say(`${count}点・${total.toLocaleString()}円 を購入します…`);
       const submit = await waitFor(() => {
         const b = document.querySelector("#betList .btnSubmit");
@@ -362,7 +364,7 @@
         const pw = await waitFor(() => [...document.querySelectorAll("input[type=password]")].find((n) => n.offsetParent !== null), "投票用パスワードの欄がありません");
         const text = document.body.innerText.replace(/\s/g, "");
         if (!text.includes(want.total.toLocaleString())) throw new Error(`合計 ${want.total.toLocaleString()}円 が画面に見当たりません`);
-        if (want.total > 4000) throw new Error("上限を超えています");
+        if (want.total > (want.cap || 4000)) throw new Error("上限を超えています");
         setValue(pw, v.teleboat_betPassword || "");
         await sleep(300);
         const buy = [...document.querySelectorAll("a, input[type=submit], input[type=button], button")]
