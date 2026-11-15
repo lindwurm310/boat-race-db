@@ -3,7 +3,8 @@
 // (1日の上限 DAY_CAP 円まで。入金・購入には自動ログイン欄で保存した投票用パスワードを使う)。
 (() => {
   const CONFIRM_KEY = "byosou-confirm"; // 自動で「投票入力完了」を押したときの点数・合計 (購入確認画面で照合する)
-  if (/\/betconf/.test(location.pathname) || (!document.getElementById("betkati1") && !document.getElementById("boatraceTitle"))) {
+  const isTop = /\/bet\/top\//.test(location.pathname); // ログイン直後の開催一覧
+  if (/\/betconf/.test(location.pathname) || (!isTop && !document.getElementById("betkati1") && !document.getElementById("boatraceTitle"))) {
     confirmPage();
     return;
   }
@@ -88,9 +89,13 @@
     const spent = done.size * STAKE;
     const cap = Math.max(0, Math.min(DAY_CAP - spent, lim === null ? DAY_CAP : lim));
     const n = Math.floor(cap / STAKE);
-    const keep = new Set([...open].sort((a, b) => b.ev - a.ev).slice(0, n).map((p) => p.key));
+    const byEv = [...open].sort((a, b) => b.ev - a.ev);
+    const keep = new Set(byEv.slice(0, n).map((p) => p.key));
+    // 残高を考えない、1日の上限だけで選んだ買い目 (全自動の入金額を決めるのに使う)
+    const wantKeys = new Set(byEv.slice(0, Math.floor(Math.max(0, DAY_CAP - spent) / STAKE)).map((p) => p.key));
     return {
       buy: open.filter((p) => keep.has(p.key)),
+      want: open.filter((p) => wantKeys.has(p.key)),
       dropped: open.filter((p) => !keep.has(p.key)),
       closed: all.filter((p) => p.deadline <= cut && !done.has(p.key)),
       done: all.filter((p) => done.has(p.key)),
@@ -121,7 +126,9 @@
       `1点${STAKE}円・1日の上限${DAY_CAP.toLocaleString()}円` +
       (p.lim !== null ? `・購入限度額 ${p.lim.toLocaleString()}円` : "") +
       (p.spent ? `・今日入れた分 ${p.spent.toLocaleString()}円` : "") +
-      (p.dropped.length ? `・上限を超えるので期待値の低い ${p.dropped.length}点 を外しました` : "") +
+      (p.dropped.length ? (p.want.length > p.buy.length
+        ? `・残高が足りない ${p.want.length - p.buy.length}点 は入金してから入れます`
+        : `・上限を超えるので期待値の低い ${p.dropped.length}点 を外しました`) : "") +
       (p.closed.length ? `・締切済み ${p.closed.length}点` : "")}));
     if (p.buy.length) parts.push(table(p.buy));
     const go = el("button", {className: "byosou-go", textContent: "ベットリストに入れる", disabled: !p.buy.length});
@@ -143,9 +150,10 @@
       : "入れるのはベットリストまでです。中身と合計金額を確かめてから、自分で「投票入力完了」を押し、投票用パスワードを入れて購入してください。"}));
     body.replaceChildren(...parts);
     let tried = false;
-    try { tried = sessionStorage.getItem(AUTO_KEY + today()) === "1"; } catch { /* なし */ }
-    if (settings.auto && settings.betPassword && p.buy.length && !tried && !running) {
-      try { sessionStorage.setItem(AUTO_KEY + today(), "1"); } catch { /* なし */ }
+    const stage = AUTO_KEY + today() + (isTop ? "-top" : "-bet");
+    try { tried = sessionStorage.getItem(stage) === "1"; } catch { /* なし */ }
+    if (settings.auto && settings.betPassword && p.want.length && !tried && !running) {
+      try { sessionStorage.setItem(stage, "1"); } catch { /* なし */ }
       setTimeout(() => autoRun(p, go, log), 1500);
     }
   }
@@ -154,7 +162,7 @@
   async function autoRun(p, go, log) {
     const say = (t) => log.append(el("div", {textContent: t}));
     try {
-      const need = p.buy.length * STAKE;
+      const need = p.want.length * STAKE;
       const lim = limitYen();
       if (lim === null) throw new Error("購入限度額が読めません");
       if (lim < need) {
@@ -174,6 +182,12 @@
         log = body.querySelector(".byosou-log"); go = body.querySelector(".byosou-go");
       }
       if (!p.buy.length) { say("残高が無いので購入しませんでした"); return; }
+      if (isTop) { // 開催一覧から、最初の買い目の場の投票画面へ移る (移った先で続きを行う)
+        say(`${p.buy[0].venue}の投票画面に移ります…`);
+        const tile = await waitFor(() => document.querySelector(`#jyo${p.buy[0].jcd} a`), `${p.buy[0].venue}が開催一覧にありません`);
+        tile.click();
+        return;
+      }
       const ok = await run(p.buy, go, log);
       if (!ok) throw new Error("ベットリストに1点も入りませんでした");
       const count = betCount(), total = totalAmount();
