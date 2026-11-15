@@ -61,7 +61,7 @@ def main():
     pl["lane"] = pl["lane"].str[0].astype(int)
     d = df[df.race_id.isin(pr.race_id)].merge(pl, on=["race_id", "lane"], how="left")
     if a.bi:
-        d = d[d.groupby("race_id")["sx_course"].transform(lambda s: s.notna().all())]
+        d = d[d["sx_course"].notna().groupby(d["race_id"]).transform("all")]
     d["resid"] = d["win"] - d["p"]
     fin = d["finish"].astype(float)
     g = d.groupby("race_id")
