@@ -113,13 +113,23 @@
   .cal .d .star { position: absolute; top: 2px; right: 5px; color: #d26a00; font-weight: bold; font-size: 12px; }
   .cal .d.today { outline: 2px solid var(--navy); outline-offset: -1px; }
   .cal .d.pred { border-style: dashed; border-color: #8aa2cf; }
+  .cal .d.past { cursor: pointer; }
+  .cal .d.sel { outline: 3px solid #d26a00; outline-offset: -2px; }
+  .cal .d .gp { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cal .d .gp .sh { display: none; }
+  .cal .d .gp.up { color: var(--green); } .cal .d .gp.dn { color: var(--red); }
+  /* 予想と結果の比べ (カレンダーの日を押したとき) */
+  .lanes { white-space: nowrap; } .lanes .lane + .lane { margin-left: 2px; }
+  .lane.hit { box-shadow: 0 0 0 2px var(--green); }
+  .lane.miss { opacity: .3; }
+  .dif { text-align: left; white-space: nowrap; } .dif.good { color: var(--green); font-weight: bold; } .dif.bad { color: var(--red); }
   .calnav { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; }
   .calnav b { font-size: 16px; min-width: 8em; text-align: center; }
   .heat td { min-width: 52px; font-variant-numeric: tabular-nums; }
   .heat td.nodata { color: #bbb; }
   .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid #ccc; vertical-align: middle; margin: 0 3px 0 8px; }
   .dl { font-size: 11px; } .dl.up { color: var(--green); } .dl.down { color: var(--red); }
-  @media (max-width: 700px) { .cal { gap: 2px; } .cal .d { min-height: 60px; padding: 2px 3px; } .cal .d .v { font-size: 13px; } .cal .d .sub { display: none; }
+  @media (max-width: 700px) { .cal { gap: 2px; } .cal .d { min-height: 60px; padding: 2px 3px; } .cal .d .v { font-size: 13px; } .cal .d .sub { display: none; } .cal .d .gp .lg { display: none; } .cal .d .gp .sh { display: inline; }
     .rb { grid-template-columns: 42% 1fr 50px; } }
   @media (max-width: 700px) { main { padding: 12px 10px 30px; } nav { padding: 0 6px; } nav button { padding: 8px 9px; } header { padding: 8px 12px; } }
 </style>
@@ -588,9 +598,15 @@ const CAL_METRIC = {
     legend: ["40%以上", "35%前後", "30%未満"], agg: rs => ratio(rs, r => r["単勝的中"] || 0, r => r["単勝点数"] || 0)},
   hon: {name: "本命の1着率", f: r => r["本命1着率"], color: heatAround(0.57), hi: 0.65, mid: 0.57, lo: 0.5,
     legend: ["62%以上", "57%前後", "52%未満"], agg: rs => ratio(rs, r => (r["本命1着率"] || 0) * r["レース"], r => r["レース"] || 0)},
+  gap: {name: "予想と結果の差 (本命の1着率 − 予想した確率)", f: r => r["本命1着率"] != null && r["予想の本命1着確率"] != null ? r["本命1着率"] - r["予想の本命1着確率"] : null,
+    color: v => v == null ? "#fff" : v >= 0.05 ? "#bfe5c6" : v >= 0.015 ? "#dcf1df" : v > -0.015 ? "#f6f3dc" : v > -0.05 ? "#fbe9da" : "#f8d6d6",
+    fmt: v => { const n = Math.round(v * 100); return (n > 0 ? "+" : n < 0 ? "−" : "±") + Math.abs(n) + "pt"; }, hi: 0.08, mid: 0, lo: -0.08,
+    legend: ["予想より5pt以上よく当たった", "予想どおり (±1.5pt)", "予想より5pt以上外れた"],
+    agg: rs => ratio(rs, r => ((r["本命1着率"] || 0) - (r["予想の本命1着確率"] || 0)) * r["レース"], r => r["予想の本命1着確率"] != null ? r["レース"] || 0 : 0)},
   t5: {name: "3連単上位5点の回収率", f: r => r["3連単上位5点回収率"], color: heatRate, hi: 1.3, mid: 0.95, lo: 0.6,
     legend: ["120%以上", "90〜100%", "75%未満"], agg: rs => ratio(rs, r => (r["3連単上位5点回収率"] || 0) * r["レース"], r => r["レース"] || 0)},
 };
+const mfmt = (M, v) => v == null || isNaN(v) ? "" : M.fmt ? M.fmt(v) : pct0(v);
 function ratio(rs, num, den) { const d = rs.reduce((a, r) => a + (+den(r) || 0), 0); return d ? rs.reduce((a, r) => a + (+num(r) || 0), 0) / d : null; }
 // 曜日ごとのまとめ (狙い目の曜日)
 function weekdayTable(days, M) {
@@ -604,7 +620,7 @@ function weekdayTable(days, M) {
   });
   const best = rows.filter(r => r.v != null).reduce((a, b) => !a || b.v > a.v ? b : a, null);
   return h("div", {}, h("h3", {textContent: "曜日ごと"}),
-    table([["曜日", "w"], ["日数", "n"], [M.name, r => h("span", {style: `background:${M.color(r.v)};padding:0 6px;border-radius:3px`, textContent: pct(r.v)})],
+    table([["曜日", "w"], ["日数", "n"], [M.name, r => h("span", {style: `background:${M.color(r.v)};padding:0 6px;border-radius:3px`, textContent: mfmt(M, r.v)})],
       ["単勝 点数", "pts"], ["単勝の収支", r => signYen(r.bal)], ["単勝が黒字の日", r => r.n ? `${r.plus} / ${r.n}日` : ""]], rows, r => r === best ? "hi" : "", "weekday"),
     h("p", {className: "note", textContent: `${M.name}が一番良い曜日を橙にしています。日数が少ないうちは偶然の差が大きいので参考程度に。`}));
 }
@@ -614,10 +630,10 @@ function monthHeat(months, M, onPick) {
   if (ys.length < 1 || months.length < 3) return "";
   const mm = Object.fromEntries(months.map(r => [r["月"], r]));
   const cell = rs => { const v = rs.length ? M.agg(rs) : null;
-    return h("td", {className: v == null ? "nodata" : "", style: `background:${M.color(v)}`, textContent: v == null ? "-" : pct0(v)}); };
+    return h("td", {className: v == null ? "nodata" : "", style: `background:${M.color(v)}`, textContent: v == null ? "-" : mfmt(M, v)}); };
   const trs = ys.map(y => h("tr", {}, h("td", {textContent: y + "年"}),
     ...Array.from({length: 12}, (_, k) => { const key = `${y}-${String(k + 1).padStart(2, "0")}`, r = mm[key];
-      const td = cell(r ? [r] : []); if (r) { td.style.cursor = "pointer"; td.title = `${key}: ${M.name} ${pct(M.f(r))}`; td.onclick = () => onPick(key); } return td; }),
+      const td = cell(r ? [r] : []); if (r) { td.style.cursor = "pointer"; td.title = `${key}: ${M.name} ${mfmt(M, M.f(r))}`; td.onclick = () => onPick(key); } return td; }),
     cell(months.filter(r => r["月"].startsWith(y)))));
   const avgRow = h("tr", {}, h("td", {}, h("b", {textContent: "平均"})),
     ...Array.from({length: 12}, (_, k) => cell(months.filter(r => +r["月"].slice(5) === k + 1))), cell(months));
@@ -625,6 +641,103 @@ function monthHeat(months, M, onPick) {
     h("div", {className: "tw"}, h("table", {className: "heat"}, h("thead", {}, h("tr", {}, h("th", {textContent: "年"}),
       ...Array.from({length: 12}, (_, k) => h("th", {textContent: `${k + 1}月`})), h("th", {textContent: "年間"}))), h("tbody", {}, ...trs, avgRow))),
     h("p", {className: "note", textContent: "下の「平均」の行で、どの月が良いか (狙い目の月) を見られます。日ごとの成績がある月は押すとカレンダーをその月にします。"}));
+}
+
+// カレンダーの日に出す「本命の1着率 予想→実際」(緑 = 予想よりよく当たった、赤 = 外れた)
+function gapLine(r) {
+  const e = r["予想の本命1着確率"], a = r["本命1着率"];
+  if (e == null || a == null) return "";
+  const d = a - e;
+  return h("div", {className: "gp" + (d >= 0.015 ? " up" : d <= -0.015 ? " dn" : ""), title: `本命の1着率 予想 ${pct(e)} → 実際 ${pct(a)}`},
+    h("span", {className: "lg", textContent: `予${Math.round(e * 100)}→実${Math.round(a * 100)}%`}), h("span", {className: "sh", textContent: CAL_METRIC.gap.fmt(d)}));
+}
+// 着順 (1-3-4) を艇の色で。cmp を渡すと、同じ着の艇が合っていれば緑の枠、違えば薄く
+function laneSeq(s, cmp) {
+  const xs = String(s || "").split("-").filter(Boolean);
+  if (!xs.length) return "";
+  const ys = cmp ? String(cmp).split("-") : null;
+  return h("span", {className: "lanes"}, xs.map((x, i) => {
+    const e = lane(x);
+    if (ys) e.classList.add(ys[i] === x ? "hit" : "miss");
+    return e;
+  }));
+}
+// 1レースの予想と結果の違い
+function raceDiff(r, p) {
+  const res = String(r["結果"] || "").split("-").filter(Boolean);
+  if (!res.length) return {text: "結果なし (中止・返還など)", cls: ""};
+  const hon = String(r["本命"]), win = res[0];
+  const at = res.indexOf(hon);
+  const wp = p && p[`${win}号艇`] != null ? p[`${win}号艇`] : null;
+  if (truthy(r["予想着順的中"])) return {text: "予想どおり (予想着順がぴったり)", cls: "good"};
+  if (win === hon) {
+    const pr = String(r["予想着順"] || "").split("-");
+    return {text: `本命が1着。2・3着は ${res.slice(1).join("-")} (予想 ${pr.slice(1).join("-")})`, cls: "good"};
+  }
+  return {text: `本命${hon}号艇は${at >= 0 ? at + 1 + "着" : "4着以下"}、1着は${win}号艇` + (wp != null ? ` (予想 ${pct0(wp)})` : ""),
+    cls: wp != null && wp < 0.1 ? "bad" : ""};
+}
+// カレンダーで押した日の、レースごとの予想と結果
+function calDayDetail(date) {
+  const box = h("div", {className: "card", style: "margin-top:12px"}, h("div", {className: "note", textContent: `${date} の予想と結果を読み込み中…`}));
+  (async () => {
+    let j, pred = {};
+    try {
+      [j, pred] = await Promise.all([api(`/api/check?date=${date}`),
+        api(`/api/predictions?date=${date}`).then(x => Object.fromEntries(x.rows.map(r => [r.race_id, r]))).catch(() => ({}))]);
+    } catch (e) { box.replaceChildren(h("p", {}, `${date}: ${e.message}`)); return; }
+    const rows = j.rows.map(r => {
+      const p = pred[r.race_id] || {};
+      const res = String(r["結果"] || "").split("-").filter(Boolean);
+      const buys = String(p["単勝買い目"] || "").split(" ").filter(Boolean);
+      const d = raceDiff(r, p);
+      return {...r, "締切": p["締切"], "本命選手": p["本命選手"], "単勝買い目": p["単勝買い目"] || (r["単勝点数"] > 0 ? "?" : null),
+        "_p": p, "_win": res[0] || null, "_wp": res[0] && p[`${res[0]}号艇`] != null ? p[`${res[0]}号艇`] : null,
+        "_buyp": buys.reduce((a, b) => a + (+p[`${b}号艇`] || 0), 0), "相違": d.text, "_cls": d.cls,
+        "_kind": !res.length ? "none" : truthy(r["本命1着"]) ? "hon" : "miss"};
+    });
+    const done = rows.filter(r => r._kind !== "none");
+    const buy = done.filter(r => r["単勝点数"] > 0);
+    const sum = (rs, f) => rs.reduce((a, r) => a + (+f(r) || 0), 0);
+    const kind = h("select", {}, [["", "全部のレース"], ["hon", "本命が1着 (予想どおり)"], ["miss", "本命が負けた (予想と違う)"],
+      ["big", "大荒れ (1着の艇の予想が10%未満)"]].map(([v, t]) => h("option", {value: v, textContent: t})));
+    kind.value = state.calDayKind || "";
+    const tb = h("div"), fb = h("div");
+    const cols = [["締切", "締切"], ["場", "場"], ["R", "R"],
+      ["予想 本命", r => h("span", {}, lane(r["本命"]), " ", pct0(r["本命1着確率"]))], ["予想着順", r => laneSeq(r["予想着順"])],
+      ["結果", r => laneSeq(r["結果"], r["予想着順"]), "", r => r["結果"]],
+      ["本命の着", r => r._kind === "none" ? "" : r._kind === "hon" ? h("span", {className: "ok", textContent: "1着"}) :
+        h("span", {className: "err", textContent: (() => { const i = String(r["結果"]).split("-").indexOf(String(r["本命"])); return i >= 0 ? `${i + 1}着` : "4着以下"; })()}),
+        "", r => { const i = String(r["結果"] || "").split("-").indexOf(String(r["本命"])); return r._kind === "none" ? null : i >= 0 ? i + 1 : 4; }],
+      ["1着の艇の予想", r => r._win ? h("span", {className: r._wp != null && r._wp < 0.1 ? "err" : ""}, lane(r._win), " ", pct0(r._wp)) : "", "", r => r._wp],
+      ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""],
+      ["単勝", r => !(r["単勝点数"] > 0) ? "" : r["単勝的中"] > 0 ? h("span", {className: "ok", textContent: `○ ${money(r["単勝払戻"])}`}) : h("span", {className: "ng", textContent: "×"})],
+      ["3連単5点", r => r._kind === "none" ? "" : truthy(r["上位5点的中"]) ? h("span", {className: "ok", textContent: `○ ${money(r["三連単配当"])}`}) : h("span", {className: "ng", textContent: "×"})],
+      ["予想と結果の違い", r => h("span", {className: "dif " + r._cls, textContent: r["相違"]}), "l", r => r["相違"]],
+      ["公式", r => resultLink(r, date)]];
+    const drawRows = () => {
+      state.calDayKind = kind.value;
+      const v = kind.value;
+      const rs = rows.filter(r => !v || (v === "big" ? r._wp != null && r._wp < 0.1 && r._kind === "miss" : r._kind === v));
+      fb.replaceChildren(filterBar("calday", rs, x => tb.replaceChildren(table(cols, x, buyRow, "calday")), {noBuy: false}));
+    };
+    kind.onchange = drawRows;
+    const fmtN = (e, a, u) => `予想 ${e.toFixed(1)}${u} → 実際 ${a}${u}`;
+    box.replaceChildren(h("h3", {style: "margin-top:0", textContent: `${date.slice(5).replace("-", "/")} の予想と結果の違い (${done.length}レース)`}),
+      h("div", {className: "kpis", style: "margin-bottom:8px"},
+        kpi("本命が1着 (予想は確率の合計)", fmtN(sum(done, r => r["本命1着確率"]), done.filter(r => r._kind === "hon").length, "R"), "real"),
+        buy.length ? kpi(`単勝の的中 (${sum(buy, r => r["単勝点数"])}点)`, fmtN(sum(buy, r => r._buyp), buy.filter(r => r["単勝的中"] > 0).length, "回"), "real") : "",
+        kpi("3連単上位5点の的中", fmtN(sum(done, r => r["3連単上位5点の的中確率"]), done.filter(r => truthy(r["上位5点的中"])).length, "R"), "real"),
+        kpi("予想着順ぴったり", `${done.filter(r => truthy(r["予想着順的中"])).length}R`, "real"),
+        kpi("大荒れ (1着の予想10%未満)", `${done.filter(r => r._kind === "miss" && r._wp != null && r._wp < 0.1).length}R`, "real")),
+      h("div", {className: "bar"}, kind, h("button", {className: "btn sub", textContent: "答え合わせの画面で見る", onclick: () => { state.checkDate = date; show("check"); }})),
+      fb, tb,
+      h("p", {className: "note", textContent: "予想 = 前日〜朝に出した予想。結果の艇は、予想着順と同じ着なら緑の枠、違えば薄くしています。" +
+        "「予想」の数はモデルが出した確率の合計 (例: 本命1着確率 60% のレースが10Rなら 6.0R) で、実際がこれより多ければ予想よりよく当たった日です。" +
+        "「1着の艇の予想」は、実際に1着になった艇にモデルが付けていた1着確率で、10%未満 (赤) は予想外の決着です。"}));
+    drawRows();
+  })();
+  return box;
 }
 
 // ---------- 各画面 ----------
@@ -749,11 +862,20 @@ const PAGES = {
           const v = M.f(r);
           cell.style.background = M.color(v);
           const bal = r["単勝点数"] ? r["単勝点数"] * 100 * ((r["単勝回収率"] || 0) - 1) : null;
-          cell.append(h("div", {className: "v", textContent: v == null ? "-" : pct0(v)}),
+          cell.append(h("div", {className: "v", textContent: v == null ? "-" : mfmt(M, v)}),
             h("div", {className: "sub"}, r["単勝点数"] ? `単勝 ${r["単勝点数"]}点 的中${r["単勝的中"]}` : "単勝 買い目なし"),
-            bal != null ? h("div", {className: "sub " + (bal > 0 ? "ok" : "err"), textContent: yen(bal)}) : "");
+            bal != null ? h("div", {className: "sub " + (bal > 0 ? "ok" : "err"), textContent: yen(bal)}) : "",
+            gapLine(r));
           if ((r["単勝回収率"] || 0) >= 1.2) cell.append(h("span", {className: "star", title: "単勝の回収率120%以上 (狙い目だった日)", textContent: "★"}));
-          cell.title = `${date}  単勝 回収率 ${pct(r["単勝回収率"])} / 的中率 ${pct(r["単勝点数"] ? r["単勝的中"] / r["単勝点数"] : null)} / 本命1着率 ${pct(r["本命1着率"])} / 3連単5点 回収率 ${pct(r["3連単上位5点回収率"])}`;
+          cell.title = `${date}  単勝 回収率 ${pct(r["単勝回収率"])} / 的中率 ${pct(r["単勝点数"] ? r["単勝的中"] / r["単勝点数"] : null)} / 本命1着率 ${pct(r["本命1着率"])} / 3連単5点 回収率 ${pct(r["3連単上位5点回収率"])}` +
+            (r["予想の本命1着確率"] != null ? `\n本命の1着率: 予想 ${pct(r["予想の本命1着確率"])} → 実際 ${pct(r["本命1着率"])}` : "") +
+            (src.value ? "" : "\n押すと、レースごとの予想と結果の違いを下に出します");
+          if (!src.value) {
+            cell.classList.add("past");
+            if (date === state.calDay) cell.classList.add("sel");
+            cell.onclick = () => { state.calDay = date; grid.querySelectorAll(".sel").forEach(e => e.classList.remove("sel")); cell.classList.add("sel");
+              dayBox.replaceChildren(calDayDetail(date)); dayBox.scrollIntoView({behavior: "smooth", block: "start"}); };
+          }
         } else if (p) {
           cell.classList.add("pred");
           cell.append(h("div", {className: "v", style: "color:#3b6fd4", textContent: `${p.buy}点`}),
@@ -766,8 +888,8 @@ const PAGES = {
           const k = new Date(date + "T00:00:00Z").getUTCDay(), w = wd[k];
           cell.classList.add("pred");
           cell.append(h("div", {className: "sub", style: "color:#3b6fd4", textContent: date === addDays(t, 1) ? "予想は今日16時ごろ" : "予想は前日16時ごろ"}),
-            w && w.n ? h("div", {className: "sub", style: "color:#667", textContent: `これまでの${"日月火水木金土"[k]}曜 ${pct0(w.v)}`}) : "");
-          cell.title = `${date}: 番組表は前日に出るので、予想は前日の16時ごろに入ります。` + (w && w.n ? `これまでの${"日月火水木金土"[k]}曜日の${M.name}は ${pct(w.v)} (${w.n}日)。` : "");
+            w && w.n ? h("div", {className: "sub", style: "color:#667", textContent: `これまでの${"日月火水木金土"[k]}曜 ${mfmt(M, w.v)}`}) : "");
+          cell.title = `${date}: 番組表は前日に出るので、予想は前日の16時ごろに入ります。` + (w && w.n ? `これまでの${"日月火水木金土"[k]}曜日の${M.name}は ${mfmt(M, w.v)} (${w.n}日)。` : "");
         }
         grid.append(cell);
       }
@@ -776,18 +898,25 @@ const PAGES = {
       const pts = md.reduce((a, r) => a + (r["単勝点数"] || 0), 0), hit = md.reduce((a, r) => a + (r["単勝的中"] || 0), 0);
       const got = md.reduce((a, r) => a + (r["単勝点数"] || 0) * 100 * (r["単勝回収率"] || 0), 0);
       const plus = md.filter(r => (r["単勝回収率"] || 0) >= 1).length;
+      const dayBox = h("div");
+      if (!src.value && state.calDay && dm[state.calDay] && state.calDay.startsWith(ym)) dayBox.append(calDayDetail(state.calDay));
       out.replaceChildren(
         h("div", {className: "calnav"}, h("button", {className: "btn sub", textContent: "‹ 前の月", disabled: i <= 0, onclick: () => go(-1)}),
           h("b", {textContent: `${Y}年${Mo}月`}), h("button", {className: "btn sub", textContent: "次の月 ›", disabled: i >= months.length - 1, onclick: () => go(1)})),
         md.length ? h("div", {className: "kpis", style: "margin-bottom:8px"},
           kpi("単勝の買い目の回収率", pct(pts ? got / (pts * 100) : null), "real"), kpi("単勝の的中率 (的中/点数)", pct(pts ? hit / pts : null), "real"),
           kpi("単勝の収支 (1点100円)", pts ? yen(got - pts * 100) : "-", "real"), kpi("黒字の日", `${plus} / ${md.length}日`, "real"),
-          kpi("本命の1着率", pct(avg(md, "本命1着率")), "real")) : "",
+          kpi("本命の1着率", pct(avg(md, "本命1着率")), "real"),
+          kpi("本命の1着率 予想→実際", md.some(r => r["予想の本命1着確率"] != null)
+            ? `${pct0(ratio(md, r => (r["予想の本命1着確率"] || 0) * r["レース"], r => r["予想の本命1着確率"] != null ? r["レース"] : 0))} → ${pct0(ratio(md, r => (r["本命1着率"] || 0) * r["レース"], r => r["予想の本命1着確率"] != null ? r["レース"] : 0))}` : "-", "real")) : "",
         grid,
         h("p", {className: "note"}, h("span", {className: "swatch", style: `background:${M.color(M.hi)}`}), M.legend[0],
           h("span", {className: "swatch", style: `background:${M.color(M.mid)}`}), M.legend[1],
           h("span", {className: "swatch", style: `background:${M.color(M.lo)}`}), M.legend[2],
-          "。★ = 単勝の回収率120%以上の日。点線の日はこれからの日。予想が出ている日 (今日・明日) は単勝の買い目の点数で、これまでの平均より多い日に「狙い目」と出します。押すとその日の予想を開きます。明日の予想は前日の16時ごろに入り、その先の日はその曜日のこれまでの成績を参考に出しています。"),
+          "。★ = 単勝の回収率120%以上の日。点線の日はこれからの日。予想が出ている日 (今日・明日) は単勝の買い目の点数で、これまでの平均より多い日に「狙い目」と出します。押すとその日の予想を開きます。明日の予想は前日の16時ごろに入り、その先の日はその曜日のこれまでの成績を参考に出しています。" +
+          "「予→実」は本命の1着率の予想 (本命1着確率の平均) と実際で、緑 = 予想よりよく当たった日、赤 = 予想より外れた日。" +
+          (src.value ? "" : "答え合わせが済んだ日を押すと、その日のレースごとに予想と結果の違いを下に出します。")),
+        dayBox,
         weekdayTable(days, M),
         s && s.months ? monthHeat(s.months, M, ym => { if (months.includes(ym)) { state.calMonth = ym; draw(); } }) : "");
     };
