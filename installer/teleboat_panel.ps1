@@ -25,6 +25,7 @@ function Stop-Panel {
 if ($Remove) {
     Stop-Panel
     schtasks /Delete /TN $Task /F 2>$null | Out-Null
+    Remove-Item (Join-Path ([Environment]::GetFolderPath("Startup")) "テレボート自動投票パネル.lnk") -ErrorAction SilentlyContinue
     Remove-Item $UpdBat, (Join-Path $desk "iPad用の自動投票.url") -ErrorAction SilentlyContinue
     Write-Host "自動投票パネルを止めて、自動起動とデスクトップのファイルを削除しました (設定は $Dest\teleboat に残っています)"
     exit
@@ -87,9 +88,17 @@ $vpyw = Join-Path $venv "Scripts\pythonw.exe"
 Write-Host "3/4 パソコンを起動したときに自動で動くようにします"
 $start = Join-Path $App "start.bat"
 Set-Content $start "@echo off`r`nset PYTHONUTF8=1`r`ncd /d `"$App`"`r`nstart `"`" `"$vpyw`" `"$App\server.py`"" -Encoding Default
-schtasks /Create /F /TN $Task /SC ONLOGON /TR "`"$start`"" | Out-Null
+# ログオン時のタスクは管理者が要るので、スタートアップ フォルダにショートカットを置く
+$startup = [Environment]::GetFolderPath("Startup")
+$sh = New-Object -ComObject WScript.Shell
+$lnk = $sh.CreateShortcut((Join-Path $startup "テレボート自動投票パネル.lnk"))
+$lnk.TargetPath = $start
+$lnk.WorkingDirectory = $App
+$lnk.WindowStyle = 7
+$lnk.Save()
 # 前の仕組み (毎朝 Edge でテレボートを開いて拡張機能が買う) は二重に買わないように止める
-schtasks /Delete /TN "BoatRaceTeleboat" /F 2>$null | Out-Null
+schtasks /Query /TN "BoatRaceTeleboat" 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN "BoatRaceTeleboat" /F 2>$null | Out-Null }
 Set-Content $UpdBat "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$Dest\teleboat_panel.ps1`"`r`npause" -Encoding Default
 
 # ---- 4. 起動 ----
