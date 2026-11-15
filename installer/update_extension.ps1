@@ -23,6 +23,21 @@ if (-not (Test-Path (Join-Path $src "manifest.json"))) { throw "取得したフ�
 $ext = Join-Path $Dest "chrome-extension"
 New-Item -ItemType Directory -Force $ext | Out-Null
 Copy-Item (Join-Path $src "*") $ext -Recurse -Force
+# ブラウザがデスクトップなど別の場所から読み込んでいるときは、そこも入れ替える
+$desk = [Environment]::GetFolderPath("Desktop")
+$extra = @()
+foreach ($dk in @($desk, (Join-Path $env:USERPROFILE "Desktop")) | Select-Object -Unique) {
+    $extra += (Join-Path $dk "chrome-extension\chrome-extension"), (Join-Path $dk "chrome-extension")
+}
+$extraFile = Join-Path $Dest "extension_dirs.txt"
+if (Test-Path $extraFile) { $extra += Get-Content $extraFile -Encoding UTF8 | Where-Object { $_.Trim() } }
+foreach ($d in $extra) {
+    $m = Join-Path $d "manifest.json"
+    if ((Test-Path $m) -and ((Get-Content $m -Raw -Encoding UTF8) -match "teleboat|ib\.mbrace")) {
+        Copy-Item (Join-Path $src "*") $d -Recurse -Force
+        Write-Host "入れ替えました: $d"
+    }
+}
 foreach ($f in "update_extension.ps1", "teleboat_task.ps1") {
     $s = Join-Path $root.FullName "installer\$f"
     if (Test-Path $s) { Copy-Item $s (Join-Path $Dest $f) -Force }
