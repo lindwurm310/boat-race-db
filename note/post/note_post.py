@@ -98,24 +98,50 @@ def click_text(page, *texts, timeout=15000):
     raise RuntimeError(f"ボタンが見つからない: {texts}") from last
 
 
+def _try_file_button(page, loc, img_path):
+    """ボタンを押してファイル選択が出たら画像を渡す。出なければ False。"""
+    try:
+        with page.expect_file_chooser(timeout=6000) as fc:
+            loc.click()
+            up = page.get_by_text(re.compile("画像をアップロード|アップロード"))
+            try:
+                up.first.wait_for(state="visible", timeout=2500)
+                up.first.click()
+            except PWTimeout:
+                pass
+        fc.value.set_files(img_path)
+        return True
+    except PWTimeout:
+        page.keyboard.press("Escape")
+        return False
+
+
 def set_header_image(page, img_path):
-    # エディタ上部の「画像を追加」→ ファイル選択（Playwright はファイル選択画面を開かずに渡せる）
-    for sel in ['button[aria-label="画像を追加"]', 'button[aria-label*="見出し画像"]',
-                'button:has-text("画像を追加")']:
+    # エディタ上部（タイトル欄より上）のアイコンだけのボタン → ファイル選択
+    done = False
+    for sel in ['button[aria-label*="画像"]', 'button:has-text("画像を追加")']:
         loc = page.locator(sel)
-        if loc.count():
-            with page.expect_file_chooser(timeout=15000) as fc:
-                loc.first.click()
-                # メニューが出る場合は「画像をアップロード」を選ぶ
-                up = page.get_by_text("画像をアップロード")
-                try:
-                    up.first.wait_for(state="visible", timeout=3000)
-                    up.first.click()
-                except PWTimeout:
-                    pass
-            fc.value.set_files(img_path)
+        if loc.count() and _try_file_button(page, loc.first, img_path):
+            done = True
             break
-    else:
+    if not done:
+        title = page.locator('textarea[placeholder*="タイトル"], [data-placeholder*="タイトル"]').first
+        ty = title.bounding_box()["y"]
+        btns = page.locator("button")
+        for i in range(btns.count()):
+            b = btns.nth(i)
+            try:
+                box = b.bounding_box()
+                if not box or not b.is_visible() or box["y"] + box["height"] > ty + 5:
+                    continue
+                if (b.inner_text() or "").strip():
+                    continue
+            except Exception:
+                continue
+            if _try_file_button(page, b, img_path):
+                done = True
+                break
+    if not done:
         raise RuntimeError("見出し画像のボタンが見つからない")
     # トリミング画面が出たらそのまま保存
     try:
