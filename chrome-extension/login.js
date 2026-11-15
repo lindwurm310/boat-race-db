@@ -14,7 +14,6 @@
   }
   const btn = document.getElementById("loginButton");
   if (!btn) return;
-  const KEY = "byosou-autologin-at";
   const FIELDS = [["memberNo", "加入者番号"], ["pin", "暗証番号"], ["authPassword", "認証用パスワード"]];
   const $ = (id) => document.getElementById(id);
   const L = (m) => { try { globalThis.byosouLog && globalThis.byosouLog(m); } catch { /* なし */ } };
@@ -42,10 +41,10 @@
       return;
     }
     text.textContent = "自動ログインします…";
-    // 失敗したときに押し続けないよう、1分に1回まで
-    let last = 0;
-    try { last = +sessionStorage.getItem(KEY) || 0; } catch { /* なし */ }
-    if (Date.now() - last < 60000) { text.textContent = "自動ログイン: 1分以内に一度押したので、今回は押しません"; return; }
+    // 失敗したときや画面を開き直したときに押し続けないよう、どのタブからでも3分に1回まで
+    // (続けて押すとテレボートが「連続して操作された」エラーを出す)
+    const last = +v.teleboat_lastLogin || 0;
+    if (Date.now() - last < 180000) { text.textContent = "自動ログイン: 3分以内に一度押したので、今回は押しません"; L(text.textContent); return; }
     let tries = 0;
     const timer = setInterval(() => {
       tries++;
@@ -60,7 +59,7 @@
       const ready = FIELDS.every(([id]) => $(id) && $(id).value !== "");
       if (ready && !btn.parentElement.classList.contains("off") && !btn.disabled) {
         clearInterval(timer);
-        try { sessionStorage.setItem(KEY, String(Date.now())); } catch { /* なし */ }
+        chrome.storage.local.set({teleboat_lastLogin: Date.now()});
         btn.click();
         text.textContent = "自動ログイン: ログインを押しました（投票画面が別ウィンドウで開きます）";
         L("自動ログイン: ログインを押しました");
