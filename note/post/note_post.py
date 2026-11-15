@@ -192,7 +192,11 @@ def save_draft(page):
 
 def set_tags(page, tags):
     inp = page.locator('input[placeholder*="ハッシュタグ"]').first
-    inp.wait_for(state="visible", timeout=20000)
+    try:
+        inp.wait_for(state="visible", timeout=5000)
+    except PWTimeout:  # placeholder が無い版：「ハッシュタグ」見出しの直後の input
+        inp = page.locator('xpath=//*[contains(normalize-space(text()),"ハッシュタグ")]/following::input[1]').first
+        inp.wait_for(state="visible", timeout=15000)
     for t in tags:
         inp.click()
         inp.fill(t)
@@ -202,10 +206,18 @@ def set_tags(page, tags):
 
 def set_paid(page, price):
     click_text(page, "有料")
-    price_in = page.locator('input[name*="price"], input[placeholder*="価格"], input[type="number"]').first
+    page.wait_for_timeout(1000)
+    # 価格欄には name も placeholder も無いので、「価格」という見出しの直後の input を探す
+    price_in = page.locator('xpath=//*[normalize-space(text())="価格"]/following::input[1]').first
     price_in.wait_for(state="visible", timeout=15000)
-    price_in.fill(str(price))
-    page.keyboard.press("Tab")
+    if price_in.input_value().strip() != str(price):
+        price_in.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.insert_text(str(price))
+        page.keyboard.press("Tab")
+    page.wait_for_timeout(500)
+    if price_in.input_value().strip() != str(price):
+        raise RuntimeError(f"価格が {price} 円にならない（{price_in.input_value()}）")
 
 
 def set_paid_line(page):
@@ -264,8 +276,10 @@ def post(dry):
                 raise RuntimeError("note がタイトル・本文を入力済みと認識していない")
             page.wait_for_load_state("networkidle")
             set_paid(page, j["price"])
-            set_paid_line(page)
             set_tags(page, j["tags"])
+            click_text(page, "有料エリア設定")
+            page.wait_for_timeout(2000)
+            set_paid_line(page)
             shot(page, "before_publish")
             if dry:
                 return f"SKIP {date} 試運転のため「投稿する」の直前で止めました（画面は log に保存）"
