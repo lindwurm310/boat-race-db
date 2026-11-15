@@ -1,6 +1,17 @@
 // テレボートのログイン画面: 設定画面 (拡張機能のアイコン) で保存した加入者番号・暗証番号・認証用パスワードを入れて、
 // 自動で「ログイン」を押す。値はこのブラウザの chrome.storage.local にだけある。
 (() => {
+  // ?byosou=log のときはログインせず、保存したログを画面に出す (Claude が読んで直すため)
+  if (/byosou=log/.test(location.search + location.hash)) {
+    chrome.storage.local.get("teleboat_log", (v) => {
+      const pre = document.createElement("pre");
+      pre.id = "byosou-log-dump";
+      pre.style.cssText = "position:fixed;inset:0;z-index:99999;background:#fff;color:#000;overflow:auto;margin:0;padding:8px;font-size:12px;white-space:pre-wrap";
+      pre.textContent = (v.teleboat_log || []).join("\n");
+      document.body.append(pre);
+    });
+    return;
+  }
   const btn = document.getElementById("loginButton");
   if (!btn) return;
   const KEY = "byosou-autologin-at";

@@ -2,6 +2,8 @@
 // 「全自動」がオンなら、画面を開いたときに 不足分の入金 → ベットリストに入れる → 投票入力完了 → 購入 まで行う
 // (1日の上限 DAY_CAP 円まで。入金・購入には自動ログイン欄で保存した投票用パスワードを使う)。
 (() => {
+  const PENDING_KEY = "byosou-pending";
+  const DONE_KEY = "byosou-teleboat-done-"; // 今日購入した買い目 (二重に買わないため)
   const CONFIRM_KEY = "byosou-confirm"; // 自動で「投票入力完了」を押したときの点数・合計 (購入確認画面で照合する)
   const isTop = /\/bet\/top\//.test(location.pathname); // ログイン直後の開催一覧
   // 投票画面 (画面の中身は後から描かれるので URL でも判断する)
@@ -15,7 +17,6 @@
   let STAKE = 100;        // 1点の金額 (円)。設定画面で変えられる
   let DAY_CAP = 4000;     // 1日の上限 (円)。購入限度額 (残高) が少ないときはそちらに合わせる。設定画面で変えられる
   const MARGIN_MIN = 3;   // 締切まで3分を切ったレースは入れない
-  const DONE_KEY = "byosou-teleboat-done-"; // 今日ベットリストに入れた買い目 (二重に入れないため)
   const DEP_KEY = "byosou-teleboat-deposit-"; // 今日自動で入金した金額
   const AUTO_KEY = "byosou-auto-tried-";      // このウィンドウで今日の全自動を始めたか (失敗したときに繰り返さない)
 
@@ -61,6 +62,13 @@
 
   function doneSet() {
     try { return new Set(JSON.parse(localStorage.getItem(DONE_KEY + today()) || "[]")); } catch { return new Set(); }
+  }
+  // ベットリストに入れた買い目 (このウィンドウ)。購入できたら done に移す
+  function addPending(key) {
+    try {
+      const a = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "[]"); a.push(key);
+      sessionStorage.setItem(PENDING_KEY, JSON.stringify(a));
+    } catch { /* なし */ }
   }
   function markDone(key) {
     const s = doneSet(); s.add(key);
@@ -274,7 +282,7 @@
       if (cell) cell.textContent = "入力中…";
       try {
         await addBet(p);
-        markDone(p.key);
+        addPending(p.key);
         L(`ベットリストに入れました ${p.venue}${+p.rno}R 単勝${p.boat} ${STAKE}円`);
         ok++;
         if (cell) cell.textContent = "✓";
@@ -390,9 +398,20 @@
 
   // ---- 購入確認画面: 全自動で「投票入力完了」を押したときだけ、点数・合計を照合して購入する ----
   function confirmPage() {
+    if (!/\/betconf/.test(location.pathname)) return;
     let want = null;
     try { want = JSON.parse(sessionStorage.getItem(CONFIRM_KEY) || "null"); } catch { /* なし */ }
-    if (/\/betconf/.test(location.pathname)) L(want ? "購入確認画面を開きました" : "購入確認画面 (全自動で進めた記録が無いので何もしません)");
+    // 画面の作りをログに残す (直すときの手がかり)
+    setTimeout(() => {
+      const desc = (n) => {
+        const near = ((n.closest("tr, div, li, dl") || n.parentElement || {}).innerText || "").replace(/\s+/g, " ").slice(0, 40);
+        return `${n.tagName.toLowerCase()}#${n.id || "-"}.${(n.className || "").toString().replace(/\s+/g, ".") || "-"}[${n.type || ""}${n.name ? " name=" + n.name : ""}]「${(n.value || n.textContent || "").trim().slice(0, 20)}」<${near}>`;
+      };
+      const vis = (n) => n.offsetParent !== null;
+      L("画面の入力欄: " + [...document.querySelectorAll("input, select, textarea")].filter((n) => n.type !== "hidden" && vis(n)).map(desc).join(" / "));
+      L("画面のボタン: " + [...document.querySelectorAll("a, button, input[type=submit], input[type=button]")].filter((n) => vis(n) && (n.value || n.textContent || "").trim()).map(desc).slice(0, 40).join(" / "));
+    }, 1500);
+    L(want ? "購入確認画面を開きました" : "購入確認画面 (全自動で進めた記録が無いので何もしません)");
     if (!want || want.date !== today()) return;
     try { sessionStorage.removeItem(CONFIRM_KEY); } catch { /* なし */ }
     chrome.storage.local.get("teleboat_betPassword", async (v) => {
@@ -400,29 +419,54 @@
       const say = (t) => { L(t); box.append(el("div", {className: "byosou-msg", textContent: t})); };
       document.body.append(box);
       try {
-        const pw = await waitFor(() => [...document.querySelectorAll("input[type=password]")].find((n) => n.offsetParent !== null), "投票用パスワードの欄がありません");
+        await sleep(2000);
+        const vis = (n) => n.offsetParent !== null;
+        const pw = await waitFor(() => [...document.querySelectorAll("input[type=password]")].find(vis), "投票用パスワードの欄がありません");
         const text = document.body.innerText.replace(/\s/g, "");
         if (!text.includes(want.total.toLocaleString())) throw new Error(`合計 ${want.total.toLocaleString()}円 が画面に見当たりません`);
         if (want.total > (want.cap || 4000)) throw new Error("上限を超えています");
+        // 合計の購入金額をもう一度入れる欄 (欄の後ろが「00円」なら100円単位)
+        const amt = [...document.querySelectorAll("input")].find((n) => vis(n) && n !== pw && n.type !== "hidden" && n.type !== "checkbox" &&
+          (/amount|amt|kingaku/i.test(n.id + " " + n.name + " " + n.className) || /金額/.test(((n.closest("tr, div, dl") || {}).innerText || ""))));
+        if (amt) {
+          const after = ((amt.parentElement || {}).innerText || "") + (amt.nextSibling ? amt.nextSibling.textContent || "" : "");
+          const unit = /00\s*円/.test(after) ? 100 : /000\s*円/.test(after) ? 1000 : 1;
+          setValue(amt, String(want.total / unit));
+          L(`購入金額の欄 (${amt.id || amt.name || amt.className}) に ${want.total / unit} を入れました (単位 ${unit}円)`);
+        } else {
+          L("購入金額の欄が見つかりません");
+        }
         setValue(pw, v.teleboat_betPassword || "");
         await sleep(300);
         const buy = [...document.querySelectorAll("a, input[type=submit], input[type=button], button")]
-          .find((n) => n.offsetParent !== null && /^投票(する|確定)$/.test((n.value || n.textContent || "").trim()));
+          .find((n) => vis(n) && /^投票(する|確定)$/.test((n.value || n.textContent || "").trim()));
         if (!buy) throw new Error("「投票する」ボタンが見つかりません");
         say(`${want.count}点・${want.total.toLocaleString()}円 を購入します`);
         buy.click();
-        // 「投票します。よろしいですか?」の確認が出たら OK を押す
+        let result = "";
         await waitFor(() => {
+          const pop = document.querySelector("#errorPop");
+          const txt = pop && vis(pop) ? pop.textContent.replace(/\s/g, "") : "";
           const ok = visible(document.querySelectorAll("#ok"));
-          const txt = ((document.querySelector("#errorPop") || {}).textContent || "").replace(/\s/g, "");
-          if (ok) { L(`購入の確認に OK を押しました: ${txt.slice(0, 60)}`); ok.click(); return true; }
-          return !document.body.contains(buy); // 次の画面に進んだ
-        }, "購入の確認画面から進みません", 15000).catch((e) => say(e.message));
+          if (ok) { L(`購入の確認に OK を押しました: ${txt.slice(0, 60)}`); ok.click(); return false; }
+          if (txt && /エラー/.test(txt)) { result = "error:" + txt.slice(0, 80); return true; }
+          if (/受け付けました|受付|投票完了|購入しました/.test(document.body.innerText)) { result = "ok"; return true; }
+          return false;
+        }, "購入の結果が出ません", 20000);
+        if (result === "ok") {
+          const pend = JSON.parse(sessionStorage.getItem(PENDING_KEY) || "[]");
+          pend.forEach(markDone);
+          sessionStorage.removeItem(PENDING_KEY);
+          say(`購入できました: ${want.count}点・${want.total.toLocaleString()}円`);
+        } else {
+          throw new Error(result.replace(/^error:/, ""));
+        }
       } catch (e) {
         say(`自動購入を止めました: ${e.message}`);
       }
     });
   }
+
 
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
   function msg(text) { return el("div", {className: "byosou-msg", textContent: text}); }
