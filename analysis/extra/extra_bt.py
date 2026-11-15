@@ -5,7 +5,7 @@
 
   - DB の最終日から1年ずつさかのぼって --years 年分を、その1年より前の --days 日だけで学習して予想する
   - morning (朝から使える): なし = 今の予想 (V4_FEATS) と、それにモーター・ボート・今節・当地・体重 を1つずつ足したもの、全部足したもの
-  - late (直前): 展示 = なし + 展示タイム (前の検証の「展示」) と、それにスタート展示・チルト・当日体重・部品交換 を1つずつ足したもの、全部
+  - late (直前): なし = v5 (今の予想)、展示 = v5 + 展示タイム と、それにスタート展示・チルト・当日体重・部品交換 を1つずつ足したもの、全部
   - 単勝の期待値に使うオッズのモデルは、なし・展示とも同じ特徴量 (勝率のモデルとそろえる)
   - 出力のファイルは tenji.py と同じ形 (<年>_<モデル>_check.csv など)。まとめは summary.py
 """
@@ -22,7 +22,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 import feats  # noqa: E402
-from predict import (V4_FEATS, Book, Predictor, build_strategies, features, fit_odds, load,  # noqa: E402
+from predict import (V4_FEATS, V5_FEATS, Book, Predictor, build_strategies, features, fit_odds, load,  # noqa: E402
                      metrics, simulate, tickets_from_probs, win_payouts)
 import yosou  # noqa: E402
 from yosou import HISTORY_DAYS, compare, kaime_rows, last_date, pred_table  # noqa: E402
@@ -41,10 +41,11 @@ def groups_morning(new):
 
 
 def groups_late(late):
-    base = V4_FEATS + EX
+    # 今の予想 (v5) を元にする。「展示」= 今の直前モデルから風・波を除いたもの
+    base = V5_FEATS + EX
     g = {"スタート展示": late["sx"], "チルト": late["tilt"], "当日体重": late["wday"], "部品交換": late["parts"]}
     g["直前全部"] = [c for v in g.values() for c in v]
-    return {"なし": V4_FEATS, "展示": base} | {k: base + v for k, v in g.items()}
+    return {"なし": V5_FEATS, "展示": base} | {k: base + v for k, v in g.items()}
 
 
 def periods(end, years):
@@ -95,7 +96,7 @@ def run(a):
         va = df[(d >= val.isoformat()) & (d < t0.isoformat())]
         te = df[(d >= t0.isoformat()) & (d <= t1.isoformat())]
         if a.set == "late":  # 直前情報がそろっているレースだけ (学習・予想とも)
-            ok = df.groupby("race_id")["sx_course"].transform(lambda s: s.notna().all())
+            ok = df["sx_course"].notna().groupby(df["race_id"]).transform("all")
             tr, va, te = tr[ok.loc[tr.index]], va[ok.loc[va.index]], te[ok.loc[te.index]]
         print(f"\n===== 予想 {t0}〜{t1} {te.race_id.nunique()}R / 学習 {tr.race_id.nunique()}R / 検証 {va.race_id.nunique()}R",
               flush=True)
