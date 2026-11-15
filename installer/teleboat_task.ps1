@@ -1,4 +1,4 @@
-# 毎朝 拡張機能を最新版にして、Edge でテレボートのログイン画面を開くタスクを登録する
+﻿# 毎朝 拡張機能を最新版にして、Edge でテレボートのログイン画面を開くタスクを登録する
 # (拡張機能の自動ログイン・全自動購入が動く)。デスクトップに「ボートレース拡張機能を更新」も置く。
 #   登録:  powershell -ExecutionPolicy Bypass -File teleboat_task.ps1 [-Time 09:30] [-Branch main]
 #   削除:  powershell -ExecutionPolicy Bypass -File teleboat_task.ps1 -Remove

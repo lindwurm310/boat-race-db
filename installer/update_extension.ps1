@@ -1,4 +1,4 @@
-# 予想の拡張機能 (chrome-extension) を GitHub の最新版に入れ替える。
+﻿# 予想の拡張機能 (chrome-extension) を GitHub の最新版に入れ替える。
 # 入れ替えると、ブラウザの拡張機能が1分以内に自分で読み込み直す (edge://extensions の ↻ は要らない)。
 #   実行:  powershell -ExecutionPolicy Bypass -File update_extension.ps1 [-Branch main]
 param([string]$Branch = "")
