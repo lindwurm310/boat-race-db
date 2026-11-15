@@ -212,10 +212,14 @@
     setValue(await waitFor(() => visible(document.querySelectorAll("#chargeBetPassword")), "投票用パスワードの欄がありません"), settings.betPassword);
     await sleep(300);
     document.querySelector("#executeCharge a").click();
+    let okClicked = false;
     await waitFor(() => {
       if (document.getElementById("closeChargecomp")) return true;
+      const ok = visible(document.querySelectorAll("#ok"));
+      const txt = ((document.querySelector("#errorPop") || {}).textContent || "").replace(/\s/g, "");
+      if (ok && !okClicked && /入金を実行します/.test(txt)) { okClicked = true; ok.click(); return false; } // 「入金を実行します。よろしいですか?」
       const err = document.querySelector("#errorPop .errorTxt");
-      if (err) throw new Error(`入金できませんでした: ${err.textContent.trim()}`);
+      if (err && !/よろしいですか/.test(err.textContent)) throw new Error(`入金できませんでした: ${err.textContent.trim()}`);
       return false;
     }, "入金の結果が出ません", 30000);
     document.querySelector("#closeChargecomp a").click();
@@ -386,6 +390,13 @@
         if (!buy) throw new Error("「投票する」ボタンが見つかりません");
         say(`${want.count}点・${want.total.toLocaleString()}円 を購入します`);
         buy.click();
+        // 「投票します。よろしいですか?」の確認が出たら OK を押す
+        await waitFor(() => {
+          const ok = visible(document.querySelectorAll("#ok"));
+          const txt = ((document.querySelector("#errorPop") || {}).textContent || "").replace(/\s/g, "");
+          if (ok && /よろしいですか/.test(txt)) { ok.click(); return true; }
+          return !document.body.contains(buy); // 次の画面に進んだ
+        }, "購入の確認画面から進みません", 15000).catch((e) => say(e.message));
       } catch (e) {
         say(`自動購入を止めました: ${e.message}`);
       }
