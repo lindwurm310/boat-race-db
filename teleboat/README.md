@@ -33,13 +33,12 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 - `store.py`: 設定・パスワード・日ごとの購入記録
 - `web/index.html`: 操作画面
 
-## 外出先から使う (Tailscale)
+## 外出先から使う (Tailscale Funnel)
 
-インターネットに直接は公開しない。パソコンと iPad に Tailscale (無料の VPN、https://tailscale.com/download) を入れて同じアカウントでログインすると、
-外出先からも `http://100.x.x.x:8766/` で繋がる (通信は Tailscale が暗号化する)。
+パソコンに Tailscale (https://tailscale.com/download) を入れてログインし、「自動投票パネルを更新」を実行すると、
+`tailscale funnel --bg 8766` で `https://<パソコン名>.<tailnet>.ts.net/` に公開する (iPad にはアプリは要らない)。
+デスクトップの「外出先用の自動投票.url」の合言葉付き URL を iPad で一度開けば、そのブラウザが覚える。
 
-1. パソコンに Tailscale を入れてログイン
-2. iPad に App Store から Tailscale を入れて、同じアカウントでログインし、VPN をオンにする
-3. パソコンでデスクトップの「自動投票パネルを更新」を実行 → デスクトップに「外出先用の自動投票.url」ができる。その URL を iPad で開く
-
-操作画面は、家のネットワークと Tailscale のアドレス (100.64.0.0/10) からだけ受け付ける。合言葉も要る。
+- 通信は https。合言葉 (推測できない長さ) が無いと何もできない
+- 合言葉の間違いが 10 分に 20 回を超えたら、10 分間は合言葉での入室を断る
+- 止めるとき: `tailscale funnel --bg 8766 off`

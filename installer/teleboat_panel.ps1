@@ -101,6 +101,14 @@ schtasks /Query /TN "BoatRaceTeleboat" 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) { schtasks /Delete /TN "BoatRaceTeleboat" /F 2>$null | Out-Null }
 Set-Content $UpdBat "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$Dest\teleboat_panel.ps1`"`r`npause" -Encoding Default
 
+# ---- 外出先から: Tailscale Funnel (iPad にアプリは要らない。https で合言葉付きの URL を開く) ----
+$ts = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
+if (-not $ts -and (Test-Path "C:\Program Files\Tailscale\tailscale.exe")) { $ts = "C:\Program Files\Tailscale\tailscale.exe" }
+if ($ts) {
+    Write-Host "外出先から使えるように Tailscale Funnel を設定します。ブラウザで有効にする画面が出たら「Enable」を押してください"
+    & $ts funnel --bg 8766
+}
+
 # ---- 4. 起動 ----
 Write-Host "4/4 操作画面を起動します"
 $urlFile = Join-Path $Dest "teleboat\panel_url.txt"
@@ -127,9 +135,9 @@ if (Test-Path $urlFile) {
 $outFile = Join-Path $Dest "teleboat\panel_url_outside.txt"
 Start-Sleep 2
 if (Test-Path $outFile) {
-    Write-Host "外出先から (iPad にも Tailscale を入れて同じアカウントでログインしているとき):" -ForegroundColor Green
+    Write-Host "外出先から (iPad の Safari でそのまま開けます):" -ForegroundColor Green
     Write-Host "  $((Get-Content $outFile -Raw -Encoding UTF8).Trim())" -ForegroundColor Yellow
 } else {
-    Write-Host "外出先から使うには、このパソコンと iPad に Tailscale (https://tailscale.com/download) を入れて同じアカウントでログインし、もう一度「自動投票パネルを更新」を実行してください。"
+    Write-Host "外出先から使うには、このパソコンに Tailscale (https://tailscale.com/download) を入れてログインし、もう一度「自動投票パネルを更新」を実行してください。"
 }
 Write-Host "最新版にするときは、デスクトップの「自動投票パネルを更新」をダブルクリックしてください。"

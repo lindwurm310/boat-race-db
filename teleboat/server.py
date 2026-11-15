@@ -176,6 +176,26 @@ class App:
 TAILSCALE = ipaddress.ip_network("100.64.0.0/10")  # Tailscale (外出先から VPN で繋ぐとき) のアドレス
 
 
+class Fails:
+    """合言葉の間違いが 10 分に 20 回を超えたら、10 分間は合言葉での入室を断る (覚えたブラウザはそのまま使える)"""
+    def __init__(self):
+        self.t = collections.deque()
+        self.lock = threading.Lock()
+
+    def add(self):
+        with self.lock:
+            self.t.append(time.time())
+
+    def blocked(self):
+        with self.lock:
+            while self.t and time.time() - self.t[0] > 600:
+                self.t.popleft()
+            return len(self.t) >= 20
+
+
+FAILS = Fails()
+
+
 def private(ip):
     try:
         a = ipaddress.ip_address(ip)
@@ -200,12 +220,18 @@ def make_handler(app):
             self.wfile.write(body)
 
         def authed(self, q):
+            import hmac
             tok = store.load_settings()["token"]
             c = SimpleCookie(self.headers.get("Cookie", ""))
-            if "tb" in c and c["tb"].value == tok:
+            if "tb" in c and hmac.compare_digest(c["tb"].value, tok):
                 return True, None
-            if q.get("t", [""])[0] == tok:
-                return True, f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict"
+            if FAILS.blocked():
+                return False, None
+            given = q.get("t", [""])[0]
+            if given and hmac.compare_digest(given, tok):
+                secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" or self.headers.get("Tailscale-Funnel-Request") else ""
+                return True, f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{secure}"
+            FAILS.add()
             return False, None
 
         def guard(self):
@@ -311,6 +337,22 @@ def tailscale_ip():
     return None
 
 
+def tailscale_dns():
+    """Tailscale のこのパソコンの名前 (xxx.tailnet.ts.net)。Funnel を使うときの https の宛先"""
+    import shutil
+    import subprocess
+    exe = shutil.which("tailscale") or r"C:\Program Files\Tailscale\tailscale.exe"
+    if not os.path.exists(exe):
+        return None
+    try:
+        out = subprocess.run([exe, "status", "--json"], capture_output=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        name = (json.loads(out).get("Self") or {}).get("DNSName", "").rstrip(".")
+        return name or None
+    except Exception:
+        return None
+
+
 def write_shortcut(url):
     """デスクトップに iPad で開く URL を書いたファイルを置く"""
     try:
@@ -334,8 +376,12 @@ def main():
     write_shortcut(url)
     app.log(f"操作画面を開きました: http://{lan_ip()}:{port}/ (合言葉付きの URL はデスクトップの「iPad用の自動投票.url」)")
     ts = tailscale_ip()
-    if ts:
+    dns = tailscale_dns()
+    if dns:  # Tailscale Funnel (インターネットから https で届く) を使うときの URL
+        out = f"https://{dns}/?t={s['token']}"
+    elif ts:
         out = f"http://{ts}:{port}/?t={s['token']}"
+    if dns or ts:
         try:
             with open(os.path.join(store.BASE, "panel_url_outside.txt"), "w", encoding="utf-8") as f:
                 f.write(out + "\n")
@@ -345,7 +391,7 @@ def main():
                     f.write(f"[InternetShortcut]\nURL={out}\n")
         except OSError:
             pass
-        app.log(f"外出先からは Tailscale 経由で http://{ts}:{port}/ (合言葉付きの URL はデスクトップの「外出先用の自動投票.url」)")
+        app.log(f"外出先からは {out.split('?')[0]} (合言葉付きの URL はデスクトップの「外出先用の自動投票.url」)")
     threading.Thread(target=app.scheduler, daemon=True).start()
     srv.serve_forever()
 
