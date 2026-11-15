@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $Dest = Join-Path $env:LOCALAPPDATA "BoatRaceYosou"
 $BranchFile = Join-Path $Dest "update_branch.txt"
 if (-not $Branch) {
-    if (Test-Path $BranchFile) { $Branch = (Get-Content $BranchFile -Raw).Trim() }
+    if (Test-Path $BranchFile) { $Branch = (Get-Content $BranchFile -Raw -Encoding UTF8).Trim() }
     if (-not $Branch) { $Branch = "main" }
 }
 $tmp = Join-Path $env:TEMP "boatrace_ext_update"
@@ -27,6 +27,6 @@ foreach ($f in "update_extension.ps1", "teleboat_task.ps1") {
     $s = Join-Path $root.FullName "installer\$f"
     if (Test-Path $s) { Copy-Item $s (Join-Path $Dest $f) -Force }
 }
-$ver = (Get-Content (Join-Path $ext "manifest.json") -Raw | ConvertFrom-Json).version
+$ver = (Get-Content (Join-Path $ext "manifest.json") -Raw -Encoding UTF8 | ConvertFrom-Json).version
 Write-Host "拡張機能を v$ver にしました ($ext)。ブラウザが1分以内に読み込み直します。"
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
