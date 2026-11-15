@@ -33,7 +33,8 @@ if ($Remove) {
 Write-Host "テレボート自動投票パネルを入れます" -ForegroundColor Green
 New-Item -ItemType Directory -Force $Dest | Out-Null
 $BranchFile = Join-Path $Dest "update_branch.txt"
-if (-not $Branch) {
+if ($Branch) { Set-Content $BranchFile $Branch -Encoding ASCII }
+else {
     if (Test-Path $BranchFile) { $Branch = (Get-Content $BranchFile -Raw -Encoding UTF8).Trim() }
     if (-not $Branch) { $Branch = "main" }
 }
