@@ -195,7 +195,7 @@
         tile.click();
         return;
       }
-      const ok = await run(p.buy, go, log);
+      const ok = await run([...p.buy].sort((a, b) => b.ev - a.ev), go, log); // 期待値の高い順に入れる
       if (!ok) throw new Error("ベットリストに1点も入りませんでした");
       const count = betCount(), total = totalAmount();
       if (total > DAY_CAP) throw new Error(`合計 ${total}円 が上限を超えるので購入をやめました`);
@@ -314,7 +314,7 @@
   }
 
   async function selectVenue(jcd, venue) {
-    const h2 = () => ((document.querySelector("#boatraceTitle h2") || {}).textContent || "").trim();
+    const h2 = () => ((document.querySelector("#boatraceTitle h2") || {}).textContent || "").replace(/\s/g, "");
     if (h2() === venue) return;
     const open = await waitFor(() => document.querySelector("#boatraceChnage a"), "場変更のボタンがありません");
     open.click();
@@ -326,7 +326,17 @@
     j.click();
     await sleep(200);
     (await waitFor(() => document.getElementById("jyoChange"), "「変更する」がありません")).click();
-    await waitFor(() => h2() === venue, `${venue}に切り替わりませんでした`);
+    try {
+      await waitFor(() => {
+        const ok = visible(document.querySelectorAll("#errorPop #ok"));
+        if (ok) { L(`場変更の確認に OK を押しました: ${(document.querySelector("#errorPop").textContent || "").replace(/\s/g, "").slice(0, 60)}`); ok.click(); }
+        return h2() === venue;
+      }, "", 15000);
+    } catch {
+      const pop = ((document.querySelector("#popupMain") || {}).innerText || "").replace(/\s+/g, " ").slice(0, 120);
+      const c = document.querySelector("#closeJyosel a"); if (c && c.offsetParent !== null) c.click();
+      throw new Error(`${venue}に切り替わりませんでした (画面の場名: ${h2() || "なし"}・表示中: ${pop || "なし"})`);
+    }
     await sleep(300);
   }
 
@@ -405,7 +415,7 @@
         await waitFor(() => {
           const ok = visible(document.querySelectorAll("#ok"));
           const txt = ((document.querySelector("#errorPop") || {}).textContent || "").replace(/\s/g, "");
-          if (ok && /よろしいですか/.test(txt)) { ok.click(); return true; }
+          if (ok) { L(`購入の確認に OK を押しました: ${txt.slice(0, 60)}`); ok.click(); return true; }
           return !document.body.contains(buy); // 次の画面に進んだ
         }, "購入の確認画面から進みません", 15000).catch((e) => say(e.message));
       } catch (e) {
