@@ -64,7 +64,8 @@ def article_body(html_name):
 def browser(p):
     return p.chromium.launch_persistent_context(
         PROFILE, channel="msedge", headless=False, viewport={"width": 1280, "height": 900},
-        locale="ja-JP", args=["--disable-blink-features=AutomationControlled"])
+        locale="ja-JP", permissions=["clipboard-read", "clipboard-write"],
+        args=["--disable-blink-features=AutomationControlled"])
 
 
 def shot(page, name):
@@ -155,27 +156,38 @@ def set_title(page, title):
     loc = page.locator('textarea[placeholder*="タイトル"], [data-placeholder*="タイトル"]')
     loc.first.wait_for(state="visible", timeout=30000)
     loc.first.click()
-    loc.first.fill(title) if loc.first.evaluate("e => e.tagName") == "TEXTAREA" else page.keyboard.type(title)
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Delete")
+    page.keyboard.insert_text(title)  # 本物の入力として届ける（fill だと note が入力済みと認識しないことがある）
+    page.wait_for_timeout(500)
 
 
 def paste_body(page, body_html):
     ed = page.locator(".ProseMirror[contenteditable=true]").first
     ed.wait_for(state="visible", timeout=30000)
     ed.click()
-    # 貼り付けと同じイベントを送る（見出し・太字・箇条書き・区切り線を残す）
-    page.evaluate("""(html) => {
-        const ed = document.querySelector('.ProseMirror[contenteditable=true]');
-        ed.focus();
-        const dt = new DataTransfer();
-        dt.setData('text/html', html);
+    # クリップボードに HTML を入れて、本物の Ctrl+V で貼り付ける
+    page.evaluate("""async (html) => {
         const tmp = document.createElement('div'); tmp.innerHTML = html;
-        dt.setData('text/plain', tmp.innerText);
-        ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));
+        await navigator.clipboard.write([new ClipboardItem({
+            'text/html': new Blob([html], {type: 'text/html'}),
+            'text/plain': new Blob([tmp.innerText], {type: 'text/plain'})})]);
     }""", body_html)
-    page.wait_for_timeout(3000)
+    ed.click()
+    page.keyboard.press("Control+V")
+    page.wait_for_timeout(4000)
     text = ed.inner_text()
     if "ここから有料エリア" not in text or len(text) < 500:
         raise RuntimeError(f"本文の貼り付けに失敗（{len(text)}文字）")
+
+
+def save_draft(page):
+    page.wait_for_timeout(3000)
+    try:
+        click_text(page, "下書き保存", timeout=5000)
+        page.wait_for_timeout(3000)
+    except RuntimeError:
+        pass
 
 
 def set_tags(page, tags):
@@ -244,8 +256,12 @@ def post(dry):
             set_title(page, j["title"])
             paste_body(page, body)
             set_header_image(page, img)
+            save_draft(page)
             say("下書きを作りました")
             click_text(page, "公開に進む")
+            page.wait_for_timeout(2000)
+            if page.get_by_text("タイトル、本文を入力してください").count():
+                raise RuntimeError("note がタイトル・本文を入力済みと認識していない")
             page.wait_for_load_state("networkidle")
             set_paid(page, j["price"])
             set_paid_line(page)
