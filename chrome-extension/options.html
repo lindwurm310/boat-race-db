@@ -40,6 +40,14 @@ button.danger { background: #fff; color: #c00; border: 1px solid #c00; }
 </div>
 <div id="msg"></div>
 <p class="note" id="status"></p>
+
+<h2>動きの記録（ログ）</h2>
+<div class="row" style="margin-top:0">
+  <button id="logReload" class="sub">更新</button>
+  <button id="logCopy" class="sub">コピー</button>
+  <button id="logClear" class="danger">ログを消す</button>
+</div>
+<textarea id="log" readonly style="width:100%;height:320px;margin-top:8px;font:12px/1.5 Consolas,monospace;white-space:pre;"></textarea>
 </main>
 <script src="options.js"></script>
 </body></html>

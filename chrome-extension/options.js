@@ -28,7 +28,19 @@ $("save").onclick = () => {
   chrome.storage.local.set(out, () => {
     SECRET.forEach((k) => { $(k).value = ""; });
     $("msg").textContent = "保存しました";
-    refresh();
+    function showLog() {
+  chrome.storage.local.get("teleboat_log", (v) => {
+    const a = v.teleboat_log || [];
+    $("log").value = a.length ? a.slice().reverse().join("\n") : "（まだ記録はありません）";
+  });
+}
+$("logReload").onclick = showLog;
+$("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).then(() => { $("msg").textContent = "ログをコピーしました"; }); };
+$("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
+chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
+
+refresh();
+showLog();
   });
 };
 
@@ -36,8 +48,32 @@ $("clear").onclick = () => {
   if (!confirm("保存したログイン情報と投票用パスワードを全部消しますか?")) return;
   chrome.storage.local.remove(SECRET.map((k) => "teleboat_" + k).concat(["teleboatPin"]), () => {
     $("msg").textContent = "消しました";
-    refresh();
+    function showLog() {
+  chrome.storage.local.get("teleboat_log", (v) => {
+    const a = v.teleboat_log || [];
+    $("log").value = a.length ? a.slice().reverse().join("\n") : "（まだ記録はありません）";
+  });
+}
+$("logReload").onclick = showLog;
+$("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).then(() => { $("msg").textContent = "ログをコピーしました"; }); };
+$("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
+chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
+
+refresh();
+showLog();
   });
 };
 
+function showLog() {
+  chrome.storage.local.get("teleboat_log", (v) => {
+    const a = v.teleboat_log || [];
+    $("log").value = a.length ? a.slice().reverse().join("\n") : "（まだ記録はありません）";
+  });
+}
+$("logReload").onclick = showLog;
+$("logCopy").onclick = () => { navigator.clipboard.writeText($("log").value).then(() => { $("msg").textContent = "ログをコピーしました"; }); };
+$("logClear").onclick = () => { if (confirm("ログを消しますか?")) chrome.storage.local.remove("teleboat_log", showLog); };
+chrome.storage.onChanged.addListener((c) => { if (c.teleboat_log) showLog(); });
+
 refresh();
+showLog();

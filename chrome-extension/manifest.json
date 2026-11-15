@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ボートレース予想",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "ボートレース予想の操作画面を開くボタンと、boatrace.jp のレースのページにおすすめの買い目を出すパネル。テレボートの投票画面では今日の単勝買い目をベットリストに入れる。",
   "icons": {
     "16": "icon16.png",
@@ -40,6 +40,7 @@
         "https://ib.mbrace.or.jp/tohyo-ap-pctohyo-web/*"
       ],
       "js": [
+        "log.js",
         "teleboat.js"
       ],
       "css": [
@@ -51,6 +52,7 @@
         "https://ib.mbrace.or.jp/*"
       ],
       "js": [
+        "log.js",
         "login.js"
       ],
       "all_frames": false,

@@ -6,6 +6,7 @@
   const KEY = "byosou-autologin-at";
   const FIELDS = [["memberNo", "加入者番号"], ["pin", "暗証番号"], ["authPassword", "認証用パスワード"]];
   const $ = (id) => document.getElementById(id);
+  const L = (m) => { try { globalThis.byosouLog && globalThis.byosouLog(m); } catch { /* なし */ } };
 
   const box = document.createElement("div");
   box.id = "byosou-pinbox";
@@ -26,6 +27,7 @@
     const missing = FIELDS.filter(([id]) => !v["teleboat_" + id]).map(([, l]) => l);
     if (missing.length) {
       text.textContent = `自動ログイン: ${missing.join("・")}が未設定です`;
+      L(text.textContent);
       return;
     }
     text.textContent = "自動ログインします…";
@@ -50,9 +52,11 @@
         try { sessionStorage.setItem(KEY, String(Date.now())); } catch { /* なし */ }
         btn.click();
         text.textContent = "自動ログイン: ログインを押しました（投票画面が別ウィンドウで開きます）";
+        L("自動ログイン: ログインを押しました");
       } else if (tries > 40) {
         clearInterval(timer);
         text.textContent = "自動ログイン: ログイン画面の入力欄が見つかりませんでした";
+        L(text.textContent);
       }
     }, 250);
   });

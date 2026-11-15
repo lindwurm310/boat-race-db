@@ -4,7 +4,10 @@
 (() => {
   const CONFIRM_KEY = "byosou-confirm"; // 自動で「投票入力完了」を押したときの点数・合計 (購入確認画面で照合する)
   const isTop = /\/bet\/top\//.test(location.pathname); // ログイン直後の開催一覧
-  if (/\/betconf/.test(location.pathname) || (!isTop && !document.getElementById("betkati1") && !document.getElementById("boatraceTitle"))) {
+  // 投票画面 (画面の中身は後から描かれるので URL でも判断する)
+  const isBet = /\/bet\/betcom\//.test(location.pathname) || !!document.getElementById("betkati1") || !!document.getElementById("boatraceTitle");
+  const L = (m) => { try { globalThis.byosouLog && globalThis.byosouLog(m); } catch { /* なし */ } };
+  if (/\/betconf/.test(location.pathname) || (!isTop && !isBet)) {
     confirmPage();
     return;
   }
@@ -108,6 +111,7 @@
     body.replaceChildren(msg("今日の予想を読み込んでいます…"));
     chrome.runtime.sendMessage({type: "predictions", date: today()}, (res) => {
       if (!res || !res.ok) {
+        L(`今日 (${today()}) の予想が読めませんでした`);
         body.replaceChildren(msg(`今日 (${today()}) の予想が読めませんでした。予想ページに今日の予想が出てから「更新」を押してください。`));
         return;
       }
@@ -152,7 +156,10 @@
     let tried = false;
     const stage = AUTO_KEY + today() + (isTop ? "-top" : "-bet");
     try { tried = sessionStorage.getItem(stage) === "1"; } catch { /* なし */ }
-    if (settings.auto && settings.betPassword && p.want.length && !tried && !running) {
+    const why = !settings.auto ? "全自動がオフ" : !settings.betPassword ? "投票用パスワードが未設定" :
+      !p.want.length ? "買う買い目が無い (締切済み・上限済み)" : tried ? "このウィンドウで今日すでに実行済み" : running ? "実行中" : "";
+    L(`買い目 ${p.want.length}点 (残高内 ${p.buy.length}点)・購入限度額 ${p.lim === null ? "不明" : p.lim + "円"}・今日入れた分 ${p.spent}円` + (why ? `・全自動は動かしません: ${why}` : "・全自動を始めます"));
+    if (!why) {
       try { sessionStorage.setItem(stage, "1"); } catch { /* なし */ }
       setTimeout(() => autoRun(p, go, log), 1500);
     }
@@ -160,7 +167,7 @@
 
   // ---- 全自動: 入金 → ベットリスト → 投票入力完了 ----
   async function autoRun(p, go, log) {
-    const say = (t) => log.append(el("div", {textContent: t}));
+    const say = (t) => { L(t); log.append(el("div", {textContent: t})); };
     try {
       const need = p.want.length * STAKE;
       const lim = limitYen();
@@ -200,6 +207,7 @@
       }, "「投票入力完了」が押せません");
       submit.click();
     } catch (e) {
+      L(`全自動を止めました: ${e.message}`);
       log.append(el("div", {className: "byosou-verdict", textContent: `全自動を止めました: ${e.message}`}));
     }
   }
@@ -267,10 +275,12 @@
       try {
         await addBet(p);
         markDone(p.key);
+        L(`ベットリストに入れました ${p.venue}${+p.rno}R 単勝${p.boat} ${STAKE}円`);
         ok++;
         if (cell) cell.textContent = "✓";
       } catch (e) {
         if (cell) cell.textContent = "×";
+        L(`ベットリストに入れられませんでした ${p.venue}${+p.rno}R 単勝${p.boat}: ${e.message}`);
         log.append(el("div", {textContent: `${p.venue}${+p.rno}R 単勝${p.boat}: ${e.message}`}));
       }
     }
@@ -372,11 +382,12 @@
   function confirmPage() {
     let want = null;
     try { want = JSON.parse(sessionStorage.getItem(CONFIRM_KEY) || "null"); } catch { /* なし */ }
+    if (/\/betconf/.test(location.pathname)) L(want ? "購入確認画面を開きました" : "購入確認画面 (全自動で進めた記録が無いので何もしません)");
     if (!want || want.date !== today()) return;
     try { sessionStorage.removeItem(CONFIRM_KEY); } catch { /* なし */ }
     chrome.storage.local.get("teleboat_betPassword", async (v) => {
       const box = el("div", {id: "byosou-panel", className: "byosou-teleboat"});
-      const say = (t) => box.append(el("div", {className: "byosou-msg", textContent: t}));
+      const say = (t) => { L(t); box.append(el("div", {className: "byosou-msg", textContent: t})); };
       document.body.append(box);
       try {
         const pw = await waitFor(() => [...document.querySelectorAll("input[type=password]")].find((n) => n.offsetParent !== null), "投票用パスワードの欄がありません");
