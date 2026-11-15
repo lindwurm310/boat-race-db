@@ -213,6 +213,7 @@
         const b = document.querySelector("#betList .btnSubmit");
         return b && !b.classList.contains("off") ? b.querySelector("a") : null;
       }, "「投票入力完了」が押せません");
+      await pause();
       submit.click();
     } catch (e) {
       L(`全自動を止めました: ${e.message}`);
@@ -226,7 +227,7 @@
     const amt = await waitFor(() => visible(document.querySelectorAll("#chargeInstructAmt")), "入金の画面が開きません");
     setValue(amt, String(amount / 1000)); // 欄は1,000円単位 (「000円」が後ろに付く)
     setValue(await waitFor(() => visible(document.querySelectorAll("#chargeBetPassword")), "投票用パスワードの欄がありません"), settings.betPassword);
-    await sleep(300);
+    await pause();
     document.querySelector("#executeCharge a").click();
     let okClicked = false;
     await waitFor(() => {
@@ -239,7 +240,7 @@
       return false;
     }, "入金の結果が出ません", 30000);
     document.querySelector("#closeChargecomp a").click();
-    await sleep(500);
+    await pause();
   }
 
   async function waitBalance(target) {
@@ -281,7 +282,15 @@
       const cell = document.querySelector(`#byosou-row-${CSS.escape(p.key)} td:last-child`);
       if (cell) cell.textContent = "入力中…";
       try {
-        await addBet(p);
+        try {
+          await addBet(p);
+        } catch (e) {
+          if (!closeBusyPopup()) throw e;
+          // 速すぎると言われたら 10 秒待って 1 回だけやり直す
+          L(`「連続して操作された」と出たので 10 秒待ってやり直します ${p.venue}${+p.rno}R 単勝${p.boat}`);
+          await sleep(10000);
+          await addBet(p);
+        }
         addPending(p.key);
         L(`ベットリストに入れました ${p.venue}${+p.rno}R 単勝${p.boat} ${STAKE}円`);
         ok++;
@@ -308,23 +317,24 @@
     const btn = await waitFor(() => document.getElementById(`regbtn_${p.boat}_1`), "艇の番号のボタンがありません");
     if (btn.classList.contains("miss")) throw new Error("欠場のため入れませんでした");
     btn.querySelector("a").click();
-    await sleep(300);
+    await pause();
     const amount = await waitFor(() => visible(document.querySelectorAll("#amount")), "購入金額の欄がありません");
     setValue(amount, String(STAKE / 100)); // 欄は100円単位 (「00円」が後ろに付く)
-    await sleep(200);
+    await pause();
     const add = await waitFor(() => {
       const b = document.getElementById("regAmountBtn");
       return b && !b.classList.contains("off") ? b : null;
     }, "「ベットリストに追加」が押せません");
     add.querySelector("a").click();
     await waitFor(() => betCount() > before, "ベットリストに入ったことを確かめられませんでした");
-    await sleep(300);
+    await pause();
   }
 
   async function selectVenue(jcd, venue) {
     const h2 = () => ((document.querySelector("#boatraceTitle h2") || {}).textContent || "").replace(/\s/g, "");
     if (h2() === venue) return;
     const open = await waitFor(() => document.querySelector("#boatraceChnage a"), "場変更のボタンがありません");
+    await pause();
     open.click();
     const j = await waitFor(() => document.getElementById(`j${jcd}`), `${venue}が場変更の一覧にありません`);
     if (j.parentElement.classList.contains("end")) {
@@ -332,37 +342,45 @@
       throw new Error(`${venue}は発売していません`);
     }
     j.click();
-    await sleep(200);
+    await pause();
     (await waitFor(() => document.getElementById("jyoChange"), "「変更する」がありません")).click();
+    let okAt = 0;
     try {
       await waitFor(() => {
         const ok = visible(document.querySelectorAll("#errorPop #ok"));
-        if (ok) { L(`場変更の確認に OK を押しました: ${(document.querySelector("#errorPop").textContent || "").replace(/\s/g, "").slice(0, 60)}`); ok.click(); }
+        // OK は 3 秒に 1 回まで (ポップアップが閉じる前に押し続けると「連続して操作された」になる)
+        if (ok && Date.now() - okAt > 3000) {
+          okAt = Date.now();
+          L(`場変更の確認に OK を押しました: ${(document.querySelector("#errorPop").textContent || "").replace(/\s/g, "").slice(0, 60)}`);
+          ok.click();
+        }
         return h2() === venue;
-      }, "", 15000);
+      }, "", 20000);
     } catch {
       const pop = ((document.querySelector("#popupMain") || {}).innerText || "").replace(/\s+/g, " ").slice(0, 120);
       const c = document.querySelector("#closeJyosel a"); if (c && c.offsetParent !== null) c.click();
       throw new Error(`${venue}に切り替わりませんでした (画面の場名: ${h2() || "なし"}・表示中: ${pop || "なし"})`);
     }
-    await sleep(300);
+    await pause();
   }
 
   async function selectRace(rno) {
     const id = `selRaceNo${String(+rno).padStart(2, "0")}`;
     const tab = await waitFor(() => document.getElementById(id), `${+rno}Rのタブがありません`);
     if (tab.classList.contains("current")) return;
+    await pause();
     tab.querySelector("a").click();
     await waitFor(() => (document.getElementById(id) || {classList: {contains: () => false}}).classList.contains("current"),
       `${+rno}Rが選べません (締切済みかもしれません)`);
-    await sleep(300);
+    await pause();
   }
 
   async function clickWhen(sel, done, err) {
     if (done()) return;
+    await pause();
     (await waitFor(() => document.querySelector(sel), err)).click();
     await waitFor(done, err);
-    await sleep(200);
+    await pause();
   }
 
   function isCurrent(id) {
@@ -436,19 +454,23 @@
         } else {
           L("購入金額の欄が見つかりません");
         }
+        await pause();
         setValue(pw, v.teleboat_betPassword || "");
-        await sleep(300);
+        await pause();
         const buy = [...document.querySelectorAll("a, input[type=submit], input[type=button], button")]
           .find((n) => vis(n) && /^投票(する|確定)$/.test((n.value || n.textContent || "").trim()));
         if (!buy) throw new Error("「投票する」ボタンが見つかりません");
         say(`${want.count}点・${want.total.toLocaleString()}円 を購入します`);
         buy.click();
-        let result = "";
+        let result = "", okAt = 0;
         await waitFor(() => {
           const pop = document.querySelector("#errorPop");
           const txt = pop && vis(pop) ? pop.textContent.replace(/\s/g, "") : "";
           const ok = visible(document.querySelectorAll("#ok"));
-          if (ok) { L(`購入の確認に OK を押しました: ${txt.slice(0, 60)}`); ok.click(); return false; }
+          if (/連続して操作/.test(txt)) { result = "error:" + txt.slice(0, 80); return true; }
+          // OK は 3 秒に 1 回まで (続けて押すと「連続して操作された」になる)
+          if (ok && Date.now() - okAt > 3000) { okAt = Date.now(); L(`購入の確認に OK を押しました: ${txt.slice(0, 60)}`); ok.click(); return false; }
+          if (ok) return false;
           if (txt && /エラー/.test(txt)) { result = "error:" + txt.slice(0, 80); return true; }
           if (/受け付けました|受付|投票完了|購入しました/.test(document.body.innerText)) { result = "ok"; return true; }
           return false;
@@ -469,6 +491,16 @@
 
 
   function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+  // テレボートは操作が速すぎると「連続して操作された」エラーになるので、画面の操作ごとに 1.5〜2 秒あける
+  function pause() { return sleep(1500 + Math.random() * 500); }
+  // 「直前の処理が完了する前に連続して操作された」のポップアップが出ていたら閉じる
+  function closeBusyPopup() {
+    const pop = document.querySelector("#errorPop");
+    if (!pop || pop.offsetParent === null || !/連続して操作/.test(pop.textContent || "")) return false;
+    const b = visible(pop.querySelectorAll("#ok, #close, a"));
+    if (b) b.click();
+    return true;
+  }
   function msg(text) { return el("div", {className: "byosou-msg", textContent: text}); }
   function el(tag, props) { return Object.assign(document.createElement(tag), props || {}); }
 })();
