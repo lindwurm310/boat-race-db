@@ -41,4 +41,4 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 
 - 通信は https。合言葉 (推測できない長さ) が無いと何もできない
 - 合言葉の間違いが 10 分に 20 回を超えたら、10 分間は合言葉での入室を断る
-- 止めるとき: `tailscale funnel --bg 8766 off`
+- 止めるとき: `tailscale funnel reset`
