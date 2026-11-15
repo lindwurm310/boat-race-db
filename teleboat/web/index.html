@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>自動投票</title>
+<style>
+:root { --bg:#f4f5f7; --card:#fff; --fg:#1d2330; --mut:#6b7280; --line:#e3e6eb; --acc:#1764d8; --ok:#16833a; --ng:#c62828; --warn:#b26a00; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1b2027; --fg:#e8eaee; --mut:#9aa3af; --line:#2c333d; --acc:#5b9cff; --ok:#4cc36f; --ng:#ff6b6b; --warn:#f0a630; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+h1 { font-size: 20px; margin: 4px 0; display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }
+h1 small { font-size: 13px; color: var(--mut); font-weight: normal; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+.card h2 { font-size:15px; margin:0 0 10px; color:var(--mut); font-weight:600; }
+.row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+button { font:inherit; border:0; border-radius:12px; padding:14px 18px; min-height:52px; cursor:pointer; background:var(--line); color:var(--fg); }
+button.primary { background:var(--acc); color:#fff; }
+button.live { background:var(--ng); color:#fff; }
+button:disabled { opacity:.45; }
+.status { font-size:18px; font-weight:600; }
+.badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:13px; background:var(--line); }
+.badge.run { background:var(--acc); color:#fff; }
+.badge.test { background:var(--warn); color:#fff; }
+.badge.live { background:var(--ng); color:#fff; }
+.kv { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+.kv div { background:var(--bg); border-radius:10px; padding:8px 10px; }
+.kv b { display:block; font-size:18px; }
+.kv span { font-size:12px; color:var(--mut); }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); }
+th { color:var(--mut); font-weight:600; }
+#log { background:#0e1116; color:#d6dde6; border-radius:10px; padding:10px; font:12px/1.5 ui-monospace, Menlo, Consolas, monospace; height:320px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+#shot { width:100%; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-height:120px; }
+label { display:block; font-size:14px; color:var(--mut); }
+input, select { font:inherit; width:100%; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--fg); margin-top:4px; }
+.grid2 { display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; }
+.chk { display:flex; gap:8px; align-items:center; color:var(--fg); }
+.chk input { width:auto; margin:0; }
+.msg { min-height:1.5em; color:var(--mut); }
+.err { color:var(--ng); }
+details summary { cursor:pointer; font-weight:600; color:var(--mut); }
+</style>
+</head>
+<body>
+<main>
+  <h1>テレボート自動投票 <small id="clock"></small></h1>
+
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <div><span id="state" class="status">読み込み中…</span> <span id="modeBadge" class="badge"></span></div>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="runTest">テスト実行（購入の直前で止める）</button>
+      <button class="live" id="runLive">本番実行（購入まで）</button>
+      <button id="stop">停止</button>
+    </div>
+    <div class="kv" style="margin-top:12px">
+      <div><span>今日買った分</span><b id="spent">-</b></div>
+      <div><span>今日の入金</span><b id="deposit">-</b></div>
+      <div><span>1日の上限</span><b id="cap">-</b></div>
+      <div><span>毎日の自動実行</span><b id="auto">-</b></div>
+      <div><span>前回の結果</span><b id="last" style="font-size:14px">-</b></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>今日の買い目 <button id="reloadPlan" style="min-height:36px;padding:6px 12px;margin-left:8px">読み直す</button></h2>
+    <div id="plan" class="msg">-</div>
+  </section>
+
+  <section class="card">
+    <h2>画面写真（最新）</h2>
+    <img id="shot" alt="まだありません">
+  </section>
+
+  <section class="card">
+    <h2>ログ</h2>
+    <div id="log"></div>
+  </section>
+
+  <section class="card">
+    <details id="setBox">
+      <summary>設定</summary>
+      <div class="grid2" style="margin-top:12px">
+        <label>1点の金額（円）<input id="stake" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label>1日の上限（円）<input id="capIn" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label>毎日の自動実行の時刻<input id="auto_time" type="time"></label>
+        <label>自動実行のときの動き
+          <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
+        <label class="chk"><input id="autoIn" type="checkbox"> 毎日自動で実行する</label>
+        <label class="chk"><input id="deposit_on" type="checkbox"> 残高が足りなければ不足分を入金する（本番のみ）</label>
+        <label class="chk"><input id="headless" type="checkbox"> Edge の画面を出さずに動かす</label>
+      </div>
+      <p class="msg">ログイン情報はこのパソコンの中にだけ暗号化して保存します。空のままの欄は今の値を使います。</p>
+      <div class="grid2">
+        <label>加入者番号 <span id="s_memberNo"></span><input id="memberNo" autocomplete="off" inputmode="numeric"></label>
+        <label>暗証番号 <span id="s_pin"></span><input id="pin" type="password" autocomplete="new-password" inputmode="numeric"></label>
+        <label>認証用パスワード <span id="s_authPassword"></span><input id="authPassword" type="password" autocomplete="new-password"></label>
+        <label>投票用パスワード <span id="s_betPassword"></span><input id="betPassword" type="password" autocomplete="new-password"></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="save">保存</button>
+        <button id="clearSecrets">ログイン情報を消す</button>
+        <button id="resetAuto">今日の自動実行をもう一度できるようにする</button>
+      </div>
+      <div class="msg" id="setMsg"></div>
+    </details>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const yen = (n) => (n || 0).toLocaleString() + "円";
+let lastShot = 0, filled = false, stickBottom = true;
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-TB": "1"}, body: JSON.stringify(body)};
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && !j.message) throw new Error(j.error || r.status);
+  return j;
+}
+
+function say(t, err) { $("msg").textContent = t; $("msg").className = "msg" + (err ? " err" : ""); }
+
+async function refresh() {
+  let s;
+  try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません"; return; }
+  $("clock").textContent = `${s.date} ${s.now}`;
+  $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
+  $("modeBadge").textContent = s.running ? (s.last.mode === "live" ? "本番" : "テスト") : "";
+  $("modeBadge").className = "badge " + (s.running ? (s.last.mode === "live" ? "live" : "test") : "");
+  $("runTest").disabled = $("runLive").disabled = s.running;
+  $("stop").disabled = !s.running;
+  const st = s.settings;
+  $("spent").textContent = yen(s.today.spent);
+  $("deposit").textContent = yen(s.today.deposit);
+  $("cap").textContent = yen(st.cap);
+  $("auto").textContent = st.auto ? `${st.auto_time}（${st.mode === "live" ? "本番" : "テスト"}）` : "オフ";
+  $("last").textContent = s.last.result ? `${s.last.start.slice(11, 16)} ${s.last.result}` : "-";
+  const log = $("log");
+  stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+  log.textContent = s.log.join("\n");
+  if (stickBottom) log.scrollTop = log.scrollHeight;
+  if (s.shot_at && s.shot_at !== lastShot) { lastShot = s.shot_at; $("shot").src = "/api/shot.png?" + Date.now(); }
+  for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $("s_" + k).textContent = st.secrets_set[k] ? "（保存済み）" : "（未設定）";
+  if (!filled) {
+    filled = true;
+    $("stake").value = st.stake; $("capIn").value = st.cap; $("auto_time").value = st.auto_time; $("mode").value = st.mode;
+    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("headless").checked = st.headless;
+    if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
+  }
+  setTimeout(refresh, s.running ? 2000 : 6000);
+}
+
+async function loadPlan() {
+  $("plan").textContent = "読み込み中…";
+  try {
+    const p = await api("/api/plan");
+    if (p.error) { $("plan").textContent = p.error; return; }
+    const rows = [...p.want].sort((a, b) => b.ev - a.ev);
+    const t = document.createElement("table");
+    t.innerHTML = "<tr><th>締切</th><th>場</th><th>R</th><th>単勝</th><th>期待値</th></tr>" +
+      rows.map((x) => `<tr><td>${x.deadline}</td><td>${x.venue}</td><td>${x.rno}R</td><td>${x.boat}</td><td>${x.ev.toFixed(2)}</td></tr>`).join("");
+    const note = document.createElement("div");
+    note.className = "msg";
+    note.textContent = `買う ${rows.length}点（期待値の高い順）・締切済み ${p.closed.length}点・今日買った ${p.bought.length}点` +
+      (p.dropped.length ? `・上限を超えるので外した ${p.dropped.length}点` : "");
+    $("plan").replaceChildren(note, ...(rows.length ? [t] : []));
+  } catch (e) { $("plan").textContent = "読めませんでした: " + e.message; }
+}
+
+async function run(mode) {
+  if (mode === "live" && !confirm("本番で実行します。足りなければ入金し、購入まで行います（1日の上限まで）。よろしいですか？")) return;
+  try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
+  setTimeout(refresh, 500);
+}
+$("runTest").onclick = () => run("test");
+$("runLive").onclick = () => run("live");
+$("stop").onclick = async () => { await api("/api/stop", {}); say("停止を指示しました"); };
+$("reloadPlan").onclick = loadPlan;
+$("save").onclick = async () => {
+  const body = {stake: +$("stake").value, cap: +$("capIn").value, auto_time: $("auto_time").value, mode: $("mode").value,
+    auto: $("autoIn").checked, deposit: $("deposit_on").checked, headless: $("headless").checked};
+  for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
+  try {
+    await api("/api/settings", body);
+    for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $(k).value = "";
+    $("setMsg").textContent = "保存しました"; $("setMsg").className = "msg"; filled = false; loadPlan();
+  } catch (e) { $("setMsg").textContent = "保存できませんでした: " + e.message; $("setMsg").className = "msg err"; }
+};
+$("clearSecrets").onclick = async () => {
+  if (!confirm("保存したログイン情報を消しますか？")) return;
+  await api("/api/settings", {clear_secrets: true}); filled = false; $("setMsg").textContent = "消しました";
+};
+$("resetAuto").onclick = async () => { await api("/api/reset_today", {}); $("setMsg").textContent = "今日の自動実行をもう一度できるようにしました"; };
+refresh(); loadPlan();
+</script>
+</body>
+</html>
