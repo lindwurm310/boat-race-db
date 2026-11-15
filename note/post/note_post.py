@@ -277,6 +277,7 @@ def post(dry):
             page.wait_for_load_state("networkidle")
             set_paid(page, j["price"])
             set_tags(page, j["tags"])
+            shot(page, "settings")  # 価格とハッシュタグの確認用
             click_text(page, "有料エリア設定")
             page.wait_for_timeout(2000)
             set_paid_line(page)
