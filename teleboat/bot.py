@@ -486,7 +486,7 @@ class Run:
         amt = self.page.evaluate("""() => {
           const vis = (n) => n.offsetParent !== null;
           const c = [...document.querySelectorAll('input')].filter((n) => vis(n) && !['hidden','checkbox','radio','password','button','submit'].includes(n.type));
-          const m = c.find((n) => /amount|amt|kingaku/i.test(n.id + ' ' + n.name + ' ' + n.className)) ||
+          const m = document.querySelector('input[name=betAmount]') || c.find((n) => /amount|amt|kingaku/i.test(n.id + ' ' + n.name + ' ' + n.className)) ||
                     c.find((n) => /金額/.test(((n.closest('tr, dl, li, div') || {}).innerText || '')));
           if (!m) return null;
           if (!m.id) m.id = 'byosou-amount';
@@ -499,7 +499,16 @@ class Run:
             self.type_in(f"#{amt['id']}", total // amt["unit"], f"購入金額の確認 ({amt['unit']}円単位・欄の後ろ「{amt['after']}」)")
         else:
             self.log("購入金額の確認欄はありませんでした")
-        self.type_in("input[type=password]", store.get_secret("betPassword"), "投票用パスワード", secret=True)
+        pw_sel = self.page.evaluate("""() => {
+          const vis = (n) => n.offsetParent !== null;
+          const c = [...document.querySelectorAll('input[type=password]')].filter((n) => vis(n) &&
+            n.getAttribute('tabindex') !== '-1' && !/dummy/i.test(n.name || ''));
+          const m = document.querySelector('input[name=betPassword]') || c.find((n) => /pass/i.test(n.id + ' ' + n.name)) || c[0];
+          if (!m) return null; if (!m.id) m.id = 'byosou-pass'; return '#' + m.id;
+        }""")
+        if not pw_sel:
+            raise BotError("投票用パスワードの欄が見つかりません")
+        self.type_in(pw_sel, store.get_secret("betPassword"), "投票用パスワード", secret=True)
         self.shot("21_confirm_filled")
         if self.mode != "live":
             self.log(f"テストなので、ここで止めます ({len(added)}点・{total:,}円 は買っていません)")

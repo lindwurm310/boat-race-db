@@ -124,9 +124,10 @@ class App:
             self.log(f"止めました ({r.step}): {e}")
             self.last["result"] = f"エラー: {e}"
         except Exception as e:
-            self.log(f"思わぬエラーで止めました ({r.step}): {e}")
-            self.log(traceback.format_exc()[-1500:])
-            self.last["result"] = f"エラー: {e}"
+            first = str(e).splitlines()[0] if str(e) else type(e).__name__
+            self.log(f"思わぬエラーで止めました ({r.step}): {first}")
+            self.log(traceback.format_exc()[-800:])
+            self.last["result"] = f"エラー: {first}"
         finally:
             self.last["sec"] = int(time.time() - t0)
             self.log(f"===== 終わり ({self.last['result']}・{self.last['sec']}秒)")
