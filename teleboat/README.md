@@ -32,3 +32,14 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 - `server.py`: 操作画面のサーバー (標準ライブラリだけ)。毎日の自動実行もここ
 - `store.py`: 設定・パスワード・日ごとの購入記録
 - `web/index.html`: 操作画面
+
+## 外出先から使う (Tailscale)
+
+インターネットに直接は公開しない。パソコンと iPad に Tailscale (無料の VPN、https://tailscale.com/download) を入れて同じアカウントでログインすると、
+外出先からも `http://100.x.x.x:8766/` で繋がる (通信は Tailscale が暗号化する)。
+
+1. パソコンに Tailscale を入れてログイン
+2. iPad に App Store から Tailscale を入れて、同じアカウントでログインし、VPN をオンにする
+3. パソコンでデスクトップの「自動投票パネルを更新」を実行 → デスクトップに「外出先用の自動投票.url」ができる。その URL を iPad で開く
+
+操作画面は、家のネットワークと Tailscale のアドレス (100.64.0.0/10) からだけ受け付ける。合言葉も要る。

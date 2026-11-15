@@ -173,10 +173,13 @@ class App:
             time.sleep(20)
 
 
+TAILSCALE = ipaddress.ip_network("100.64.0.0/10")  # Tailscale (外出先から VPN で繋ぐとき) のアドレス
+
+
 def private(ip):
     try:
         a = ipaddress.ip_address(ip)
-        return a.is_private or a.is_loopback or a.is_link_local
+        return a.is_private or a.is_loopback or a.is_link_local or (a.version == 4 and a in TAILSCALE)
     except ValueError:
         return False
 
@@ -292,6 +295,18 @@ def lan_ip():
         return "127.0.0.1"
 
 
+def tailscale_ip():
+    """Tailscale が入っていれば、このパソコンの Tailscale のアドレス (100.x.x.x)"""
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ipaddress.ip_address(ip) in TAILSCALE:
+                return ip
+    except OSError:
+        pass
+    return None
+
+
 def write_shortcut(url):
     """デスクトップに iPad で開く URL を書いたファイルを置く"""
     try:
@@ -314,6 +329,19 @@ def main():
     url = f"http://{lan_ip()}:{port}/?t={s['token']}"
     write_shortcut(url)
     app.log(f"操作画面を開きました: http://{lan_ip()}:{port}/ (合言葉付きの URL はデスクトップの「iPad用の自動投票.url」)")
+    ts = tailscale_ip()
+    if ts:
+        out = f"http://{ts}:{port}/?t={s['token']}"
+        try:
+            with open(os.path.join(store.BASE, "panel_url_outside.txt"), "w", encoding="utf-8") as f:
+                f.write(out + "\n")
+            desk = os.path.join(os.path.expanduser("~"), "Desktop")
+            if os.path.isdir(desk):
+                with open(os.path.join(desk, "外出先用の自動投票.url"), "w", encoding="utf-8") as f:
+                    f.write(f"[InternetShortcut]\nURL={out}\n")
+        except OSError:
+            pass
+        app.log(f"外出先からは Tailscale 経由で http://{ts}:{port}/ (合言葉付きの URL はデスクトップの「外出先用の自動投票.url」)")
     threading.Thread(target=app.scheduler, daemon=True).start()
     srv.serve_forever()
 

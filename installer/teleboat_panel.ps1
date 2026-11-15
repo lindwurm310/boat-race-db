@@ -104,12 +104,13 @@ Set-Content $UpdBat "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass 
 # ---- 4. 起動 ----
 Write-Host "4/4 操作画面を起動します"
 $urlFile = Join-Path $Dest "teleboat\panel_url.txt"
-Remove-Item $urlFile -ErrorAction SilentlyContinue
+Remove-Item $urlFile, (Join-Path $Dest "teleboat\panel_url_outside.txt") -ErrorAction SilentlyContinue
 # iPad から繋がるように、Windows のファイアウォールで 8766 番を家のネットワーク (プライベート) にだけ開ける (初回だけ管理者の確認が出る)
-if (-not (Get-NetFirewallRule -DisplayName "BoatRaceTeleboatPanel" -ErrorAction SilentlyContinue)) {
+# 家の Wi-Fi (同じネットワーク) と Tailscale (100.64.0.0/10、外出先から VPN で繋ぐとき) からだけ許す
+if (-not (Get-NetFirewallRule -DisplayName "BoatRaceTeleboatPanel2" -ErrorAction SilentlyContinue)) {
     Write-Host "ファイアウォールの設定のため、管理者の確認が出たら「はい」を押してください"
     try {
-        Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -Command New-NetFirewallRule -DisplayName BoatRaceTeleboatPanel -Direction Inbound -Protocol TCP -LocalPort 8766 -Profile Private -Action Allow" -ErrorAction Stop
+        Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -Command Remove-NetFirewallRule -DisplayName BoatRaceTeleboatPanel -ErrorAction SilentlyContinue; New-NetFirewallRule -DisplayName BoatRaceTeleboatPanel2 -Direction Inbound -Protocol TCP -LocalPort 8766 -Profile Any -RemoteAddress LocalSubnet,100.64.0.0/10 -Action Allow" -ErrorAction Stop
     } catch { Write-Host "ファイアウォールの設定を飛ばしました (iPad から繋がらないときは、もう一度実行して「はい」を押してください)" -ForegroundColor Yellow }
 }
 Start-Process -FilePath $vpyw -ArgumentList "`"$App\server.py`"" -WorkingDirectory $App
@@ -122,5 +123,13 @@ if (Test-Path $urlFile) {
     Write-Host "  (デスクトップの「iPad用の自動投票.url」にも書いてあります。Windows のファイアウォールの確認が出たら「許可」を押してください)"
 } else {
     Write-Host "操作画面が起動しませんでした。$App\start.bat をダブルクリックして、もう一度試してください。" -ForegroundColor Red
+}
+$outFile = Join-Path $Dest "teleboat\panel_url_outside.txt"
+Start-Sleep 2
+if (Test-Path $outFile) {
+    Write-Host "外出先から (iPad にも Tailscale を入れて同じアカウントでログインしているとき):" -ForegroundColor Green
+    Write-Host "  $((Get-Content $outFile -Raw -Encoding UTF8).Trim())" -ForegroundColor Yellow
+} else {
+    Write-Host "外出先から使うには、このパソコンと iPad に Tailscale (https://tailscale.com/download) を入れて同じアカウントでログインし、もう一度「自動投票パネルを更新」を実行してください。"
 }
 Write-Host "最新版にするときは、デスクトップの「自動投票パネルを更新」をダブルクリックしてください。"
