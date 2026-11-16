@@ -325,7 +325,7 @@ class Run:
             return
         self.step = "入金"
         self.log(f"残高 {bal:,}円 が足りないので {dep:,}円 を入金します")
-        self.click("#charge a", "「入金」のメニュー")
+        self.open_charge()
         self.type_in("#chargeInstructAmt", dep // 1000, "入金額 (1,000円単位)")
         self.type_in("#chargeBetPassword", store.get_secret("betPassword"), "投票用パスワード", secret=True)
         self.shot("02_deposit")
@@ -362,6 +362,29 @@ class Run:
                 self.click("#updateBalanceBtn a", "残高更新")
             self.wait(30)
         raise BotError("30分待っても入金が残高に反映されませんでした")
+
+    def open_charge(self):
+        """「入金・精算」のメニューを開いて「入金する」を押す (メニューの中にあり、ふだんは隠れている)"""
+        self.pause()
+        try:
+            self.page.locator("#gnavi01").first.hover(timeout=5000)
+        except Exception:
+            pass
+        if not self.is_vis("#charge a"):
+            self.pause(0.8, 1.2)
+            try:
+                self.page.locator("#gnavi01").first.click(timeout=5000)
+            except Exception:
+                pass
+        self.pause(0.8, 1.2)
+        if self.is_vis("#charge a"):
+            self.vis("#charge a").click()
+        elif self.page.locator("#charge a").count():
+            self.log("「入金する」が隠れたままなので、直接押します")
+            self.page.locator("#charge a").first.evaluate("(a) => a.click()")
+        else:
+            raise BotError("「入金する」のメニューが見つかりません")
+        self.wait_until(lambda: self.is_vis("#chargeInstructAmt"), "入金の画面が開きません", 15)
 
     # ---- 投票画面 ----
     def h2(self):
