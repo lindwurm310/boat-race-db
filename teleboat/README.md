@@ -1,0 +1,44 @@
+# テレボート自動投票パネル (iPad から操作)
+
+パソコンで Playwright が Edge を動かして、テレボートで今日の予想の単勝買い目を買う。操作は iPad の Safari などから。
+
+## 入れ方 (Windows)
+
+PowerShell で次を実行する (何度実行しても大丈夫。2回目からはデスクトップの「自動投票パネルを更新」でもよい)。
+
+```
+powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/lindwurm310/boat-race-db/main/installer/teleboat_panel.ps1 -OutFile $env:TEMP\tp.ps1; & $env:TEMP\tp.ps1"
+```
+
+- プログラムは `%LOCALAPPDATA%\BoatRaceYosou\teleboat-app`、設定・記録は `%LOCALAPPDATA%\BoatRaceYosou\teleboat`
+- パソコンにログインすると自動で起動する (タスク `BoatRaceTeleboatPanel`)
+- デスクトップの「iPad用の自動投票.url」に、iPad で開く合言葉付きの URL がある (同じ Wi-Fi の中からだけ繋がる)
+
+## 使い方
+
+1. 設定で加入者番号・暗証番号・認証用パスワード・投票用パスワードを保存する (パソコンの中に Windows の DPAPI で暗号化して保存。外には送らない)
+2. 「テスト実行」: ログイン → ベットリスト → 購入確認画面で金額とパスワードを入れるところまで。入金も購入もしない
+3. 「本番実行」: 足りなければ不足分を入金し (1,000円単位・1日の上限まで)、購入まで行う
+4. 毎日の自動実行: 設定の時刻に1回 (設定の「自動実行のときの動き」がテストなら購入の直前で止める)
+
+- 1点の金額と1日の上限を超えて入金・購入しない。買えた分は日ごとに記録し、二重に買わない
+- 期待値の高い順に入れる。締切3分前を切ったレースは買わない
+- 操作ごとに 1.5〜2 秒あけ、文字は1文字ずつ打つ (速いとテレボートが「連続して操作された」エラーを出す)
+- ログと画面写真は操作画面で見られる。デスクトップに `claude` フォルダがあれば `claude\teleboat-log` にも残す (パスワードは書かない)
+
+## ファイル
+
+- `bot.py`: テレボートの操作 (Playwright)
+- `server.py`: 操作画面のサーバー (標準ライブラリだけ)。毎日の自動実行もここ
+- `store.py`: 設定・パスワード・日ごとの購入記録
+- `web/index.html`: 操作画面
+
+## 外出先から使う (Tailscale Funnel)
+
+パソコンに Tailscale (https://tailscale.com/download) を入れてログインし、「自動投票パネルを更新」を実行すると、
+`tailscale funnel --bg 8766` で `https://<パソコン名>.<tailnet>.ts.net/` に公開する (iPad にはアプリは要らない)。
+デスクトップの「外出先用の自動投票.url」の合言葉付き URL を iPad で一度開けば、そのブラウザが覚える。
+
+- 通信は https。合言葉 (推測できない長さ) が無いと何もできない
+- 合言葉の間違いが 10 分に 20 回を超えたら、10 分間は合言葉での入室を断る
+- 止めるとき: `tailscale funnel reset`
