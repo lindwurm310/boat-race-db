@@ -115,6 +115,7 @@ def load_settings():
     out = {k: d.get(k, v) for k, v in DEFAULTS.items()}
     out["token"] = d["token"]
     out["secrets_set"] = {k: bool(d.get("secret_" + k)) for k in SECRET_KEYS}
+    out["panel_pw_set"] = bool(d.get("panel_pw"))
     return out
 
 
@@ -124,6 +125,29 @@ def new_token():
         d["token"] = secrets.token_urlsafe(16)
         _write(d)
         return d["token"]
+
+
+def _pw_hash(pw, salt):
+    import hashlib
+    return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000).hex()
+
+
+def set_panel_password(pw):
+    if len(pw) < 6:
+        raise ValueError("パネルのパスワードは6文字以上にしてください")
+    salt = secrets.token_bytes(16)
+    with _lock:
+        d = _read()
+        d["panel_pw"] = {"salt": salt.hex(), "hash": _pw_hash(pw, salt)}
+        _write(d)
+
+
+def check_panel_password(pw):
+    import hmac
+    p = _read().get("panel_pw")
+    if not p or not pw:
+        return False
+    return hmac.compare_digest(_pw_hash(pw, bytes.fromhex(p["salt"])), p["hash"])
 
 
 def get_secret(key):
@@ -161,6 +185,12 @@ def save_settings(new):
                 if not v.isalnum() or len(v) > 16:
                     raise ValueError(f"{k} は英数字で入れてください")
                 d["secret_" + k] = _protect(v.encode())
+        if new.get("panel_password"):
+            pw = str(new["panel_password"])
+            if len(pw) < 6:
+                raise ValueError("パネルのパスワードは6文字以上にしてください")
+            salt = secrets.token_bytes(16)
+            d["panel_pw"] = {"salt": salt.hex(), "hash": _pw_hash(pw, salt)}
         if new.get("clear_secrets"):
             for k in SECRET_KEYS:
                 d.pop("secret_" + k, None)

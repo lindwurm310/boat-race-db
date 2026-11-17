@@ -264,6 +264,23 @@ class Fails:
 FAILS = Fails()
 
 
+LOGIN_HTML = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="apple-mobile-web-app-capable" content="yes">
+<title>自動投票</title><style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--mut:#6b7280;--line:#e3e6eb;--acc:#1764d8;--ng:#c62828}
+@media (prefers-color-scheme: dark){:root{--bg:#111418;--card:#1b2027;--fg:#e8eaee;--mut:#9aa3af;--line:#2c333d;--acc:#5b9cff;--ng:#ff6b6b}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,"Hiragino Sans","Yu Gothic UI",sans-serif}
+form{max-width:420px;margin:12vh auto 0;padding:24px 16px;background:var(--card);border:1px solid var(--line);border-radius:14px;display:grid;gap:12px}
+h1{font-size:20px;margin:0}input{font:inherit;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button{font:inherit;padding:14px;border:0;border-radius:12px;background:var(--acc);color:#fff;min-height:52px}p{margin:0;color:var(--mut);font-size:14px}.e{color:var(--ng)}
+</style></head><body><form method="post" action="/login">
+<h1>テレボート自動投票</h1>
+<p>パネルのパスワードを入れてください（設定で決めたもの）。まだ決めていなければ、合言葉（URL の t= の後ろ）でも入れます。</p>
+<input name="pw" type="password" autocomplete="current-password" autofocus required>
+<button>開く</button>%MSG%
+</form></body></html>"""
+
+
 def private(ip):
     try:
         a = ipaddress.ip_address(ip)
@@ -298,8 +315,9 @@ def make_handler(app):
             given = q.get("t", [""])[0]
             if given and hmac.compare_digest(given, tok):
                 secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" or self.headers.get("Tailscale-Funnel-Request") else ""
-                return True, f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{secure}"
-            FAILS.add()
+                return True, f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}"
+            if given:
+                FAILS.add()
             return False, None
 
         def guard(self):
@@ -324,9 +342,13 @@ def make_handler(app):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             ok, cookie = self.authed(q)
+            if not ok and u.path == "/login" and self.command == "POST":
+                return u, q, None
             if not ok:
-                self.send(401, "合言葉付きの URL (パソコンのデスクトップの「iPad用の自動投票.url」) から開いてください".encode(),
-                          "text/plain; charset=utf-8")
+                if u.path == "/" or u.path == "/login":
+                    self.send(200, LOGIN_HTML.replace("%MSG%", "").encode(), "text/html; charset=utf-8")
+                else:
+                    self.send(401, {"error": "ログインしてください"})
                 return None
             return u, q, cookie
 
@@ -362,6 +384,9 @@ def make_handler(app):
             if not g:
                 return
             u, _, _ = g
+            if u.path == "/login":
+                self.login()
+                return
             if self.headers.get("X-TB") != "1":
                 self.send(403, {"error": "不正なリクエストです"})
                 return
@@ -385,7 +410,7 @@ def make_handler(app):
                     write_urls(app)
                     app.log("合言葉を作り直しました (前の URL は使えなくなりました)")
                     self.send(200, {"ok": True, "token": tok},
-                              extra={"Set-Cookie": f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{secure}"})
+                              extra={"Set-Cookie": f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}"})
                 elif u.path == "/api/reset_today":
                     st = store.load_state()
                     st["auto_ran"] = False
@@ -397,6 +422,28 @@ def make_handler(app):
                 self.send(400, {"error": str(e)})
             except Exception as e:
                 self.send(500, {"error": str(e)})
+
+        def login(self):
+            """固定の URL で開いたときのログイン (パネルのパスワード、または合言葉)"""
+            import hmac
+            n = int(self.headers.get("Content-Length") or 0)
+            pw = parse_qs(self.rfile.read(min(n, 4096)).decode("utf-8", "replace")).get("pw", [""])[0].strip()
+            tok = store.load_settings()["token"]
+            if FAILS.blocked():
+                msg = "間違いが続いたので、10分ほど待ってからもう一度試してください"
+            elif pw and (store.check_panel_password(pw) or hmac.compare_digest(pw, tok)):
+                secure = "; Secure" if self.headers.get("Tailscale-Funnel-Request") or self.headers.get("X-Forwarded-Proto") == "https" else ""
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header("Set-Cookie", f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            else:
+                FAILS.add()
+                app.log("パネルのログインでパスワードが違いました")
+                msg = "パスワードが違います"
+            self.send(200, LOGIN_HTML.replace("%MSG%", f'<p class="e">{msg}</p>').encode(), "text/html; charset=utf-8")
 
         def log_message(self, *a):
             pass

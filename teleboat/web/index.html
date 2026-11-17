@@ -120,6 +120,10 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
         <label>認証用パスワード <span id="s_authPassword"></span><input id="authPassword" type="password" autocomplete="new-password"></label>
         <label>投票用パスワード <span id="s_betPassword"></span><input id="betPassword" type="password" autocomplete="new-password"></label>
       </div>
+      <p class="msg">パネルのパスワード: 固定の URL（このページのアドレス）を開いたときに入れるものです。6文字以上で、テレボートのものとは別にしてください。</p>
+      <div class="grid2">
+        <label>パネルのパスワード <span id="s_panel"></span><input id="panel_password" type="password" autocomplete="new-password"></label>
+      </div>
       <div class="row" style="margin-top:12px">
         <button class="primary" id="save">保存</button>
         <button id="clearSecrets">ログイン情報を消す</button>
@@ -166,6 +170,7 @@ async function refresh() {
   if (stickBottom) log.scrollTop = log.scrollHeight;
   if (s.shot_at && s.shot_at !== lastShot) { lastShot = s.shot_at; $("shot").src = "/api/shot.png?" + Date.now(); }
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $("s_" + k).textContent = st.secrets_set[k] ? "（保存済み）" : "（未設定）";
+  $("s_panel").textContent = st.panel_pw_set ? "（設定済み）" : "（未設定）";
   if (!filled) {
     filled = true;
     $("stake").value = st.stake; $("capIn").value = st.cap; $("auto_time").value = st.auto_time; $("mode").value = st.mode;
@@ -234,9 +239,10 @@ $("save").onclick = async () => {
     min_ev: +$("min_ev").value || 0, min_odds: +$("min_odds").value || 1,
     auto: $("autoIn").checked, deposit: $("deposit_on").checked, headless: $("headless").checked};
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
+  if ($("panel_password").value) body.panel_password = $("panel_password").value;
   try {
     await api("/api/settings", body);
-    for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $(k).value = "";
+    for (const k of ["memberNo", "pin", "authPassword", "betPassword", "panel_password"]) $(k).value = "";
     $("setMsg").textContent = "保存しました"; $("setMsg").className = "msg"; filled = false; loadPlan();
   } catch (e) { $("setMsg").textContent = "保存できませんでした: " + e.message; $("setMsg").className = "msg err"; }
 };
