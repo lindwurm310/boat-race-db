@@ -73,6 +73,13 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
   </section>
 
   <section class="card">
+    <h2>自動購入の結果 <button id="reloadRes" style="min-height:36px;padding:6px 12px;margin-left:8px">読み直す</button></h2>
+    <div class="kv" id="resTotal"></div>
+    <div id="results" class="msg" style="margin-top:10px">-</div>
+    <p class="msg" style="font-size:13px">当たり外れは、翌朝の答え合わせが出てから分かります（それまでは「結果待ち」で、収支・回収率には入れません）。払戻は単勝配当 × 金額で計算しています。</p>
+  </section>
+
+  <section class="card">
     <h2>画面写真（最新）</h2>
     <img id="shot" alt="まだありません">
   </section>
@@ -198,6 +205,29 @@ $("runTest").onclick = () => run("test");
 $("runLive").onclick = () => run("live");
 $("stop").onclick = async () => { await api("/api/stop", {}); say("停止を指示しました"); };
 $("reloadPlan").onclick = loadPlan;
+$("reloadRes").onclick = loadResults;
+const sign = (n) => (n > 0 ? "+" : "") + n.toLocaleString() + "円";
+const roi = (pay, stake) => stake ? Math.round(pay / stake * 100) + "%" : "-";
+async function loadResults() {
+  $("results").textContent = "読み込み中…";
+  try {
+    const r = await api("/api/results");
+    const t = r.total;
+    $("resTotal").innerHTML = [["購入", yen(t.stake)], ["払戻", yen(t.payout)], ["収支", sign(t.payout - t.settled)],
+      ["回収率", roi(t.payout, t.settled)], ["的中", `${t.hit} / ${t.n - t.pending}点`]]
+      .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join("");
+    if (!r.days.length) { $("results").textContent = "まだ自動購入した舟券はありません"; return; }
+    $("results").replaceChildren(...r.days.map((d) => {
+      const det = document.createElement("details");
+      det.innerHTML = `<summary>${d.date.slice(5).replace("-", "/")}　購入 ${yen(d.stake)}・払戻 ${yen(d.payout)}・収支 ${sign(d.payout - d.settled)}・的中 ${d.hit}/${d.n - d.pending}点` +
+        (d.pending ? `（結果待ち ${d.pending}点）` : "") + `</summary>` +
+        `<table><tr><th>場</th><th>R</th><th>単勝</th><th>金額</th><th>結果</th><th>払戻</th></tr>` +
+        d.tickets.map((x) => `<tr><td>${x.venue}</td><td>${x.rno}R</td><td>${x.boat}</td><td>${yen(x.stake)}</td><td>${x.result}</td><td>${x.payout ? yen(x.payout) : "-"}</td></tr>`).join("") +
+        `</table>`;
+      return det;
+    }));
+  } catch (e) { $("results").textContent = "読めませんでした: " + e.message; }
+}
 $("save").onclick = async () => {
   const body = {stake: +$("stake").value, cap: +$("capIn").value, auto_time: $("auto_time").value, mode: $("mode").value,
     strategy: $("strategy").value, per_race: +$("per_race").value || 1, min_prob: (+$("min_prob").value || 0) / 100,
@@ -226,7 +256,7 @@ $("newToken").onclick = async () => {
 };
 // 合言葉付きの URL で開いたら、アドレス欄から合言葉を消す (ブラウザが覚えたので要らない)
 if (location.search.includes("t=")) history.replaceState(null, "", "/");
-refresh(); loadPlan();
+refresh(); loadPlan(); loadResults();
 </script>
 </body>
 </html>

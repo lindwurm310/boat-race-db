@@ -16,14 +16,16 @@ import os
 import random
 import re
 import time
+import urllib.error
 import urllib.request
 
 import store
 
 TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テストのときだけ差し替える
+CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-17e"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-17f"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -37,6 +39,19 @@ class BotError(Exception):
 
 
 # ---------------- 予想 → 買い目 ----------------
+def fetch_check(date):
+    """その日の答え合わせ (着順・単勝配当)。まだ無ければ None"""
+    req = urllib.request.Request(CHECK_URL.format(date=date) + f"?t={int(time.time())}",
+                                 headers={"Cache-Control": "no-cache", "User-Agent": "boatrace-teleboat"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
 def fetch_predictions(date):
     req = urllib.request.Request(PRED_URL.format(date=date) + f"?t={int(time.time())}",
                                  headers={"Cache-Control": "no-cache", "User-Agent": "boatrace-teleboat"})
@@ -608,6 +623,11 @@ class Run:
             result["recorded"] = True
             state["bought"] = sorted(set(state.get("bought", [])) | {x["key"] for x in added})
             state["spent"] = state.get("spent", 0) + total
+            at = dt.datetime.now().strftime("%H:%M")
+            state.setdefault("tickets", []).extend(
+                {"key": x["key"], "race_id": x["race_id"], "venue": x["venue"], "rno": x["rno"], "boat": x["boat"],
+                 "deadline": x["deadline"], "stake": self.s["stake"], "prob": x.get("prob"), "odds": x.get("odds"),
+                 "ev": x.get("ev"), "strategy": self.s.get("strategy", "model"), "at": at} for x in added)
             store.save_state(state, self.date)
             self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
 

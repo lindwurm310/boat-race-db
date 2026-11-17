@@ -42,6 +42,8 @@ class App:
         self.current = None
         self.last = {}          # 最後の実行の結果
         self.shot_at = 0
+        self.check_cache = {}
+        self.fix_1117()
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(store.SHOTS, exist_ok=True)
         self.load_today_log()
@@ -154,6 +156,71 @@ class App:
         p = bot.plan(bot.picks(rows, s), s, store.load_state())
         p["strategy"] = bot.STRATEGIES.get(s.get("strategy", "model"))
         return {k: v for k, v in p.items()}
+
+    def fix_1117(self):
+        """11/17 は購入を記録する前の版で買ったので、ログに残った 10点をあとから記録する (1回だけ)"""
+        st = store.load_state("2026-11-17")
+        if st.get("bought") or not st.get("deposit") or st.get("fixed_1117"):
+            return
+        keys = ["13-10-5", "15-08-4", "01-05-5", "01-10-4", "01-02-2", "15-02-4", "15-03-3", "01-09-1", "15-01-1", "15-11-3"]
+        st["bought"] = sorted(f"20261117-{k}" for k in keys)
+        st["spent"] = st.get("spent", 0) + 1000
+        st["fixed_1117"] = True
+        store.save_state(st, "2026-11-17")
+        self.log("11/17 にログで確かめた 10点・1,000円 を購入の記録に加えました")
+
+    def results(self, days=60):
+        """自動購入した舟券の的中と金額。答え合わせ (翌朝) が出た日だけ当たり外れが分かる"""
+        s = store.load_settings()
+        try:
+            names = sorted((f[:-5] for f in os.listdir(store.STATE_DIR) if f.endswith(".json")), reverse=True)[:days]
+        except OSError:
+            names = []
+        out, tot = [], {"stake": 0, "settled": 0, "payout": 0, "n": 0, "hit": 0, "pending": 0}
+        for date in names:
+            st = store.load_state(date)
+            tickets = st.get("tickets") or []
+            known = {t["key"] for t in tickets}
+            for k in st.get("bought", []):  # 古い版の記録 (買い目のキーだけ)
+                if k in known:
+                    continue
+                d8, jcd, rno, boat = k.split("-")
+                tickets.append({"key": k, "race_id": f"{d8}-{jcd}-{rno}", "venue": bot.JYO.get(jcd, jcd), "rno": int(rno),
+                                "boat": boat, "stake": s["stake"]})
+            if not tickets:
+                continue
+            chk = self.check_cache.get(date)
+            if chk is None and date < store.today():
+                try:
+                    chk = bot.fetch_check(date)
+                except Exception:
+                    chk = None
+                if chk:
+                    self.check_cache[date] = chk
+            res = {r["race_id"]: r for r in (chk or {}).get("rows", [])}
+            day = {"date": date, "stake": 0, "settled": 0, "payout": 0, "n": 0, "hit": 0, "pending": 0, "tickets": []}
+            for t in sorted(tickets, key=lambda t: t.get("deadline") or ""):
+                r = res.get(t["race_id"])
+                first = str((r or {}).get("結果") or "").split("-")[0]
+                t = dict(t)
+                if not r or not first:
+                    t["result"] = "結果待ち"
+                    t["payout"] = 0
+                    day["pending"] += 1
+                else:
+                    win = first == str(t["boat"])
+                    t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
+                    t["payout"] = int((r.get("単勝配当") or 0) * t["stake"] / 100) if win else 0
+                    day["hit"] += win
+                    day["settled"] += t["stake"]
+                day["stake"] += t["stake"]
+                day["payout"] += t["payout"]
+                day["n"] += 1
+                day["tickets"].append(t)
+            for k in ("stake", "settled", "payout", "n", "hit", "pending"):
+                tot[k] += day[k]
+            out.append(day)
+        return {"days": out, "total": tot}
 
     def scheduler(self):
         """毎日 auto_time に1回だけ実行する (パソコンが起きていれば、時刻を過ぎてから起きても 2 時間以内なら実行)"""
@@ -274,6 +341,8 @@ def make_handler(app):
                         self.send(200, f.read(), "text/html; charset=utf-8", {"Set-Cookie": cookie} if cookie else None)
                 elif u.path == "/api/status":
                     self.send(200, app.status())
+                elif u.path == "/api/results":
+                    self.send(200, app.results())
                 elif u.path == "/api/plan":
                     self.send(200, app.plan())
                 elif u.path == "/api/shot.png":
