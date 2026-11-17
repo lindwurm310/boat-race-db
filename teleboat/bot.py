@@ -23,7 +23,7 @@ import store
 TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テストのときだけ差し替える
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-17d"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-17e"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -44,21 +44,65 @@ def fetch_predictions(date):
         return json.loads(r.read().decode("utf-8"))
 
 
-def picks(rows):
+STRATEGIES = {
+    "model": "予想モデルの買い目を期待値の高い順",
+    "hit": "的中率の高い順 (各レースの本命)",
+    "roi": "回収率 (期待値) の高い順",
+    "long": "高配当狙い (予想オッズが高い順)",
+}
+
+
+def _num(v):
+    try:
+        x = float(v)
+        return x if x == x else None  # NaN を除く
+    except (TypeError, ValueError):
+        return None
+
+
+def picks(rows, settings=None):
+    """予想の行から、1点ずつの単勝の買い目を作る。settings の strategy で選び方を変える。
+    各買い目: key, race_id, jcd, rno, venue, deadline, boat, prob (1着確率), odds (予想オッズ), ev (期待値), score (並べる値)"""
+    s = settings or {}
+    strategy = s.get("strategy", "model")
+    min_prob, min_ev = float(s.get("min_prob", 0) or 0), float(s.get("min_ev", 1.0) or 0)
+    min_odds, per_race = float(s.get("min_odds", 1.0) or 0), int(s.get("per_race", 1) or 1)
     out = []
     for r in rows:
-        boats = str(r.get("単勝買い目") or "").split()
-        if not boats:
-            continue
-        evs = str(r.get("買い目の期待値") or "").split()
         _, jcd, rno = r["race_id"].split("-")
-        for i, b in enumerate(boats):
-            try:
-                ev = float(evs[i])
-            except (IndexError, ValueError):
-                ev = 0.0
-            out.append({"key": f"{r['race_id']}-{b}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
-                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "boat": b, "ev": ev})
+        cands = []
+        for b in range(1, 7):
+            prob, odds = _num(r.get(f"{b}号艇")), _num(r.get(f"{b}号艇の予想オッズ"))
+            ev = prob * odds if prob is not None and odds is not None else None
+            cands.append({"boat": str(b), "prob": prob, "odds": odds, "ev": ev})
+        by_boat = {c["boat"]: c for c in cands}
+        if strategy == "model":
+            boats = str(r.get("単勝買い目") or "").split()
+            evs = str(r.get("買い目の期待値") or "").split()
+            chosen = []
+            for i, b in enumerate(boats):
+                c = dict(by_boat.get(b) or {"boat": b, "prob": None, "odds": None})
+                c["ev"] = _num(evs[i]) if i < len(evs) else c.get("ev")
+                c["score"] = c["ev"] or 0
+                chosen.append(c)
+        else:
+            ok = [c for c in cands if c["prob"] is not None and c["prob"] >= min_prob
+                  and (c["odds"] is None or c["odds"] >= min_odds)]
+            if strategy == "hit":
+                ok = sorted(ok, key=lambda c: -c["prob"])
+                for c in ok:
+                    c["score"] = c["prob"]
+            else:
+                ok = [c for c in ok if c["ev"] is not None and c["ev"] >= min_ev]
+                key = "ev" if strategy == "roi" else "odds"
+                ok = sorted(ok, key=lambda c: -c[key])
+                for c in ok:
+                    c["score"] = c[key]
+            chosen = ok
+        for c in chosen[:per_race]:
+            out.append({"key": f"{r['race_id']}-{c['boat']}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
+                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "boat": c["boat"],
+                        "prob": c.get("prob"), "odds": c.get("odds"), "ev": c.get("ev") or 0.0, "score": c.get("score") or 0.0})
     return sorted(out, key=lambda p: p["deadline"])
 
 
@@ -69,7 +113,7 @@ def plan(all_picks, settings, state, balance=None, now=None):
     cut = (now + dt.timedelta(minutes=MARGIN_MIN)).strftime("%H:%M")
     bought = set(state.get("bought", []))
     open_ = [p for p in all_picks if p["deadline"] > cut and p["key"] not in bought]
-    by_ev = sorted(open_, key=lambda p: -p["ev"])
+    by_ev = sorted(open_, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
     room = max(0, cap - state.get("spent", 0))
     want = by_ev[: room // stake]
     n = len(want) if balance is None else min(len(want), max(0, balance) // stake)
@@ -208,7 +252,8 @@ class Run:
             rows = fetch_predictions(self.date).get("rows", [])
         except Exception as e:
             raise BotError(f"今日 ({self.date}) の予想が読めませんでした: {e}")
-        allp = picks(rows)
+        allp = picks(rows, self.s)
+        self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'model'))}")
         state = store.load_state(self.date)
         p = plan(allp, self.s, state)
         self.log(f"今日の買い目 {len(allp)}点・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
@@ -240,8 +285,8 @@ class Run:
             if not p["buy"]:
                 self.log("残高が無いので買いません")
                 return
-            buy = sorted(p["buy"], key=lambda x: -x["ev"])  # 期待値の高い順
-            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R-{x['boat']}({x['ev']:.2f})" for x in buy))
+            buy = sorted(p["buy"], key=lambda x: -x.get("score", x["ev"]))  # 選び方の値の高い順
+            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R-{x['boat']}({x.get('score', x['ev']):.2f})" for x in buy))
             self.step = "投票画面"
             first = buy[0]
             self.click(f"#jyo{first['jcd']} a", f"開催一覧の{first['venue']}")

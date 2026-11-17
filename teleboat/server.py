@@ -151,7 +151,8 @@ class App:
             rows = bot.fetch_predictions(store.today()).get("rows", [])
         except Exception as e:
             return {"error": f"今日の予想が読めません: {e}"}
-        p = bot.plan(bot.picks(rows), s, store.load_state())
+        p = bot.plan(bot.picks(rows, s), s, store.load_state())
+        p["strategy"] = bot.STRATEGIES.get(s.get("strategy", "model"))
         return {k: v for k, v in p.items()}
 
     def scheduler(self):

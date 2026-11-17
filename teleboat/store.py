@@ -32,6 +32,16 @@ DEFAULTS = {
     "deposit": True,       # 残高が足りなければ不足分を入金する (本番のときだけ)
     "headless": True,      # Edge の画面を出さずに動かす
     "port": 8766,
+    # 買う舟券の選び方 (単勝)
+    #   model = 予想モデルの買い目 (期待値が1を超えたもの) を期待値の高い順
+    #   hit   = 的中率の高い順 (各レースの1着確率が一番高い艇)
+    #   roi   = 回収率 (期待値 = 1着確率 × 予想オッズ) の高い順。全部の艇から選ぶ
+    #   long  = 高配当狙い (予想オッズが高い艇のうち、期待値が条件を満たすもの)
+    "strategy": "model",
+    "min_prob": 0.0,       # 1着確率がこれ未満の艇は買わない (0〜1)
+    "min_ev": 1.0,         # 期待値がこれ未満の艇は買わない (hit 以外)
+    "min_odds": 1.0,       # 予想オッズがこれ未満の艇は買わない
+    "per_race": 1,         # 1レースで買う最大の点数
 }
 
 _lock = threading.Lock()
@@ -132,11 +142,17 @@ def save_settings(new):
                 x = bool(x)
             elif isinstance(v, int):
                 x = int(x)
+            elif isinstance(v, float):
+                x = float(x)
             d[k] = x
         if d.get("stake", 100) < 100 or d.get("stake", 100) % 100:
             raise ValueError("1点の金額は100円単位にしてください")
         if d.get("cap", 4000) < d.get("stake", 100):
             raise ValueError("1日の上限は1点の金額以上にしてください")
+        if d.get("strategy") not in ("model", "hit", "roi", "long"):
+            d["strategy"] = "model"
+        if not 1 <= d.get("per_race", 1) <= 6:
+            raise ValueError("1レースの点数は1〜6にしてください")
         if d.get("mode") not in ("test", "live"):
             d["mode"] = "test"
         for k in SECRET_KEYS:
