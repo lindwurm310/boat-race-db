@@ -130,7 +130,7 @@ function say(t, err) { $("msg").textContent = t; $("msg").className = "msg" + (e
 async function refresh() {
   let s;
   try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません"; return; }
-  $("clock").textContent = `${s.date} ${s.now}`;
+  $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
   $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
   $("modeBadge").textContent = s.running ? (s.last.mode === "live" ? "本番" : "テスト") : "";
   $("modeBadge").className = "badge " + (s.running ? (s.last.mode === "live" ? "live" : "test") : "");

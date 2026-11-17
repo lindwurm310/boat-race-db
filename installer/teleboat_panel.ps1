@@ -14,8 +14,18 @@ $UpdBat = Join-Path $desk "自動投票パネルを更新.bat"
 
 function Stop-Panel {
     Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*teleboat-app*server.py*" } |
+        Where-Object { $_.CommandLine -like "*server.py*" -and $_.CommandLine -like "*teleboat*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # 8766 番で待っているプログラムも止める (古い版が残っていると、新しい版に替わらない)
+    for ($i = 0; $i -lt 5; $i++) {
+        $own = Get-NetTCPConnection -LocalPort 8766 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+        if (-not $own) { break }
+        foreach ($p in $own) {
+            Write-Host "動いている操作画面 (PID $p) を止めます"
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep 1
+    }
     # Playwright が動かしていた Edge も閉じる (普段使いの Edge は閉じない)
     Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like "*playwright*" } |
@@ -140,4 +150,8 @@ if (Test-Path $outFile) {
 } else {
     Write-Host "外出先から使うには、このパソコンに Tailscale (https://tailscale.com/download) を入れてログインし、もう一度「自動投票パネルを更新」を実行してください。"
 }
+try {
+    $v = Invoke-RestMethod "http://127.0.0.1:8766/version" -TimeoutSec 5
+    Write-Host "動いている操作画面の版: $($v.version)" -ForegroundColor Green
+} catch { Write-Host "操作画面の版を確かめられませんでした: $_" -ForegroundColor Yellow }
 Write-Host "最新版にするときは、デスクトップの「自動投票パネルを更新」をダブルクリックしてください。"

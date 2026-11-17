@@ -142,7 +142,7 @@ class App:
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at,
-            "date": store.today(), "now": dt.datetime.now().strftime("%H:%M:%S"),
+            "version": bot.VERSION, "date": store.today(), "now": dt.datetime.now().strftime("%H:%M:%S"),
         }
 
     def plan(self):
@@ -236,6 +236,9 @@ def make_handler(app):
 
         def guard(self):
             ip = self.client_address[0]
+            if self.path == "/version" and ip in ("127.0.0.1", "::1") and not self.headers.get("Tailscale-Funnel-Request"):
+                self.send(200, {"version": bot.VERSION, "pid": os.getpid()})
+                return None
             if ip.startswith("::ffff:"):  # IPv4 を IPv6 の形で受けたとき
                 ip = ip[7:]
             if not private(ip):
@@ -406,7 +409,13 @@ def main():
     app = App()
     s = store.load_settings()
     port = s["port"]
-    srv = ThreadingHTTPServer(("0.0.0.0", port), make_handler(app))
+    class Server(ThreadingHTTPServer):
+        allow_reuse_address = False
+    try:
+        srv = Server(("0.0.0.0", port), make_handler(app))
+    except OSError as e:
+        app.log(f"操作画面を起動できませんでした (8766 番がほかで使われています): {e}")
+        raise
     write_urls(app, first=True)
     threading.Thread(target=app.scheduler, daemon=True).start()
     srv.serve_forever()
