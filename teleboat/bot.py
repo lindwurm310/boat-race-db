@@ -23,7 +23,7 @@ import store
 TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テストのときだけ差し替える
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-17b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-17c"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -556,32 +556,53 @@ class Run:
         result = {}
         ok_at = [0.0]
 
+        def record(note):
+            """OK を押したら買ったものとして先に記録する (結果の判定に失敗しても、二重に買ったり上限を超えたりしないため)"""
+            if result.get("recorded"):
+                return
+            result["recorded"] = True
+            state["bought"] = sorted(set(state.get("bought", [])) | {x["key"] for x in added})
+            state["spent"] = state.get("spent", 0) + total
+            store.save_state(state, self.date)
+            self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
+
         def finished():
             t = self.popup_text()
-            if "連続して操作" in t:
+            if "連続して操作" in t and not result.get("recorded"):
                 result["err"] = t
                 return True
-            if self.is_vis("#ok") and time.time() - ok_at[0] > 3:
+            if self.is_vis("#ok") and time.time() - ok_at[0] > 3 and not result.get("recorded"):
                 ok_at[0] = time.time()
                 self.log(f"購入の確認に OK を押しました: {t[:60]}")
                 self.vis("#ok").click()
+                record("購入を確定しました")
                 return False
             if t and "エラー" in t:
                 result["err"] = t
                 return True
+            if "/betcomp" in self.page.url:  # 投票完了の画面
+                result["ok"] = True
+                return True
             body = self.page.locator("body").inner_text()
-            if re.search(r"受け付けました|受付けました|投票完了|購入しました|受付番号", body):
+            if re.search(r"受け付けました|受付けました|投票完了|購入しました|受付番号|投票を受付|投票受付", body):
                 result["ok"] = True
                 return True
             return False
         try:
-            self.wait_until(finished, "購入の結果が出ません", 30)
+            self.wait_until(finished, "購入の結果が出ません", 40)
+        except BotError:
+            if not result.get("recorded"):
+                raise
+            result["unsure"] = True
         finally:
             self.shot("30_result")
             self.save_html("30_result")
+            self.log(f"購入後の画面: {self.page.url.split('?')[0]}")
         if result.get("err"):
+            if result.get("recorded"):
+                self.log("購入の後にエラーが出ました。テレボートの「照会」で買えたか確かめてください (今日の購入として記録したままにします)")
             raise BotError(f"購入できませんでした: {result['err'][:100]}")
-        state["bought"] = sorted(set(state.get("bought", [])) | {x["key"] for x in added})
-        state["spent"] = state.get("spent", 0) + total
-        store.save_state(state, self.date)
-        self.log(f"購入しました: {len(added)}点・{total:,}円 (今日の合計 {state['spent']:,}円)")
+        if result.get("unsure"):
+            self.log("購入完了の画面は確かめられませんでしたが、確定の OK は押したので買えているはずです (テレボートの「照会」で確かめられます)")
+        else:
+            self.log(f"購入しました: {len(added)}点・{total:,}円 (今日の合計 {state['spent']:,}円)")
