@@ -13,6 +13,8 @@ $desk = [Environment]::GetFolderPath("Desktop")
 $UpdBat = Join-Path $desk "自動投票パネルを更新.bat"
 
 function Stop-Panel {
+    # まず操作画面自身に止まってもらう (管理者として起動したものでも止まる)
+    try { Invoke-RestMethod -Method Post "http://127.0.0.1:8766/shutdown" -Headers @{"X-TB" = "1"} -TimeoutSec 5 | Out-Null; Start-Sleep 2 } catch { }
     Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -like "*server.py*" -and $_.CommandLine -like "*teleboat*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -22,9 +24,13 @@ function Stop-Panel {
         if (-not $own) { break }
         foreach ($p in $own) {
             Write-Host "動いている操作画面 (PID $p) を止めます"
-            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+            try { Stop-Process -Id $p -Force -ErrorAction Stop } catch { Write-Host "  止められませんでした: $($_.Exception.Message)" -ForegroundColor Yellow }
         }
         Start-Sleep 1
+    }
+    if (Get-NetTCPConnection -LocalPort 8766 -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "古い操作画面が止まりません。管理者として起動されたものかもしれません。" -ForegroundColor Red
+        Write-Host "パソコンを再起動するか、タスク マネージャーで pythonw.exe を終了してから、もう一度実行してください。" -ForegroundColor Red
     }
     # Playwright が動かしていた Edge も閉じる (普段使いの Edge は閉じない)
     Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" -ErrorAction SilentlyContinue |

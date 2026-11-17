@@ -239,6 +239,14 @@ def make_handler(app):
             if self.path == "/version" and ip in ("127.0.0.1", "::1") and not self.headers.get("Tailscale-Funnel-Request"):
                 self.send(200, {"version": bot.VERSION, "pid": os.getpid()})
                 return None
+            # 更新のとき、インストーラーがこのパソコンの中から止める (管理者で起動した古い画面も止められるように)
+            if self.path == "/shutdown" and self.command == "POST" and ip in ("127.0.0.1", "::1") \
+                    and not self.headers.get("Tailscale-Funnel-Request") and self.headers.get("X-TB") == "1":
+                self.send(200, {"ok": True})
+                app.stop.set()
+                app.log("更新のため操作画面を止めます")
+                threading.Thread(target=lambda: (time.sleep(1), os._exit(0)), daemon=True).start()
+                return None
             if ip.startswith("::ffff:"):  # IPv4 を IPv6 の形で受けたとき
                 ip = ip[7:]
             if not private(ip):
