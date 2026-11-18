@@ -375,7 +375,13 @@ def make_handler(app):
                     with open(p, "rb") as f:
                         self.send(200, f.read(), "image/png")
                 else:
-                    self.send(404, {"error": "ありません"})
+                    if u.path.startswith("/api/"):
+                        self.send(404, {"error": "ありません"})
+                    else:  # /login などを開いたとき (ホーム画面に保存したアドレスなど) はトップへ
+                        self.send_response(303)
+                        self.send_header("Location", "/")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
             except Exception as e:
                 self.send(500, {"error": str(e)})
 
