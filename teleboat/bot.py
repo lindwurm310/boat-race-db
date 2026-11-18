@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18d"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-18e"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -60,6 +60,7 @@ def fetch_predictions(date):
 
 
 STRATEGIES = {
+    "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
     "value": "回収率重視 (期待値1.1以上・1着確率10%以上を期待値の高い順)",
     "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
@@ -84,6 +85,9 @@ def picks(rows, settings=None):
     if strategy == "value":  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
         strategy, min_prob, min_ev = "roi", 0.10, 1.1
         min_odds, per_race = 1.0, int(s.get("per_race", 1) or 1)
+    elif strategy == "site":  # 予想サイトの「おすすめ舟券」と同じ: 全部の艇から、期待値の高い順 (1レースの点数は決めない)
+        strategy, min_prob, min_ev = "roi", float(s.get("site_prob", 0.1) or 0), float(s.get("site_ev", 1.1) or 0)
+        min_odds, per_race = 0.0, 6
     else:
         min_prob, min_ev = float(s.get("min_prob", 0) or 0), float(s.get("min_ev", 1.0) or 0)
         min_odds, per_race = float(s.get("min_odds", 1.0) or 0), int(s.get("per_race", 1) or 1)
@@ -135,7 +139,25 @@ def plan(all_picks, settings, state, balance=None, now=None):
     open_ = [p for p in all_picks if p["deadline"] > cut and p["key"] not in bought]
     by_ev = sorted(open_, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
     room = max(0, cap - state.get("spent", 0))
-    want = by_ev[: room // stake]
+    note = ""
+    if settings.get("strategy") == "site":
+        # サイトと同じ計算: n = min(候補数, 点数, 予算/100)、1点 = 予算/n を100円単位で切り捨て (最低100円)。
+        # 今日すでに買った分は予算と点数から差し引く。1日の上限 (cap) は超えない
+        budget, points = int(settings.get("site_budget") or 0), int(settings.get("site_points") or 0)
+        bud_left = budget - state.get("spent", 0) if budget else None
+        pts_left = points - len(bought) if points else None
+        n = len(by_ev)
+        if pts_left is not None:
+            n = min(n, max(0, pts_left))
+        if bud_left is not None:
+            n = min(n, max(0, bud_left) // 100)
+        stake = max(100, bud_left // n // 100 * 100) if bud_left and n > 0 else 100
+        if n * stake > room:
+            note = f"1日の上限 {cap:,}円 を超えるので {room // stake}点 に減らしました"
+            n = room // stake
+        want = by_ev[:n]
+    else:
+        want = by_ev[: room // stake]
     n = len(want) if balance is None else min(len(want), max(0, balance) // stake)
     return {
         "want": want,                 # 上限だけで選んだ分 (入金額を決める)
@@ -144,6 +166,7 @@ def plan(all_picks, settings, state, balance=None, now=None):
         "closed": [p for p in all_picks if p["deadline"] <= cut and p["key"] not in bought],
         "bought": [p for p in all_picks if p["key"] in bought],
         "room": room, "balance": balance, "spent": state.get("spent", 0),
+        "stake": stake, "note": note,
     }
 
 
@@ -276,6 +299,13 @@ class Run:
         self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'value'))}")
         state = store.load_state(self.date)
         p = plan(allp, self.s, state)
+        if self.s.get("strategy") == "site":
+            self.s["stake"] = p["stake"]  # サイトの予算から決まる1点の金額
+            self.log(f"サイトの設定: 期待値{self.s['site_ev']}以上・1着確率{round(self.s['site_prob'] * 100)}%以上・"
+                     f"予算 {self.s['site_budget'] and format(self.s['site_budget'], ',') + '円' or '決めない'}・"
+                     f"点数 {self.s['site_points'] or '決めない'} → 1点{p['stake']:,}円")
+            if p["note"]:
+                self.log(p["note"])
         self.log(f"今日の買い目 {len(allp)}点・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
                  f"買った {len(p['bought'])}点 ({state.get('spent', 0):,}円)")
         if not p["want"]:

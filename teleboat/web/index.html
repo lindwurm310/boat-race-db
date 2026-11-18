@@ -100,12 +100,14 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
           <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
         <label>買う舟券の選び方（単勝）
           <select id="strategy">
+            <option value="site">サイトの設定（予想サイトの「おすすめ舟券」で決めた条件）</option>
             <option value="value">回収率重視（おすすめ）: 期待値1.1以上・1着確率10%以上</option>
             <option value="model">予想モデルの買い目（期待値1以上）</option>
             <option value="hit">的中率の高い順（各レースの本命）※回収率は低め</option>
             <option value="roi">回収率（期待値）の高い順</option>
             <option value="long">高配当狙い（予想オッズの高い順）</option>
           </select></label>
+        <div id="siteBox" class="msg">サイトの設定: <span id="siteSum">-</span></div>
         <label>1レースで買う最大の点数<input id="per_race" type="number" min="1" max="6" step="1" inputmode="numeric"></label>
         <label>的中率がこれ以上（%）<input id="min_prob" type="number" min="0" max="100" step="1" inputmode="decimal"></label>
         <label>期待値がこれ以上（回収率・高配当のとき）<input id="min_ev" type="number" min="0" step="0.05" inputmode="decimal"></label>
@@ -177,6 +179,7 @@ async function refresh() {
     filled = true;
     $("stake").value = st.stake; $("capIn").value = st.cap; $("auto_time").value = st.auto_time; $("mode").value = st.mode;
     $("strategy").value = st.strategy || "value"; $("per_race").value = st.per_race || 1;
+    $("siteSum").textContent = siteText(st);
     $("min_prob").value = Math.round((st.min_prob || 0) * 100); $("min_ev").value = st.min_ev ?? 1; $("min_odds").value = st.min_odds ?? 1;
     $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
@@ -197,8 +200,8 @@ async function loadPlan() {
       rows.map((x) => `<tr><td>${x.deadline}</td><td>${x.venue}</td><td>${x.rno}R</td><td>${x.boat}</td><td>${pct(x.prob)}</td><td>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td>${f2(x.ev)}</td></tr>`).join("");
     const note = document.createElement("div");
     note.className = "msg";
-    note.textContent = `${p.strategy || ""}: 買う ${rows.length}点・締切済み ${p.closed.length}点・今日買った ${p.bought.length}点` +
-      (p.dropped.length ? `・上限を超えるので外した ${p.dropped.length}点` : "");
+    note.textContent = `${p.strategy || ""}: 1点${(p.stake || 100).toLocaleString()}円・買う ${rows.length}点・締切済み ${p.closed.length}点・今日買った ${p.bought.length}点` +
+      (p.dropped.length ? `・条件や上限で外した ${p.dropped.length}点` : "") + (p.note ? `（${p.note}）` : "");
     $("plan").replaceChildren(note, ...(rows.length ? [t] : []));
   } catch (e) { $("plan").textContent = "読めませんでした: " + e.message; }
 }
@@ -254,7 +257,7 @@ $("clearSecrets").onclick = async () => {
 };
 $("resetDep").onclick = async () => {
   if (!confirm("今日の入金の記録を0円に戻します。テレボートの残高は変わりません。実際に入金した分まで消すと、上限を超えて入金することがあります。よろしいですか？")) return;
-  try { await api("/api/reset_deposit", {}); $("setMsg").textContent = "今日の入金の記録を消しました"; refresh(); }
+  try { await api("/api/reset_deposit", {}); $("setMsg").textContent = "今日の入金の記録を消しました"; }
   catch (e) { $("setMsg").textContent = "消せませんでした: " + e.message; }
 };
 $("resetAuto").onclick = async () => { await api("/api/reset_today", {}); $("setMsg").textContent = "今日の自動実行をもう一度できるようにしました"; };
@@ -267,9 +270,29 @@ $("newToken").onclick = async () => {
     $("setMsg").textContent = "作り直しました。ほかの端末で開くときの新しい URL: " + url;
   } catch (e) { $("setMsg").textContent = "できませんでした: " + e.message; }
 };
+// 予想サイトの「おすすめ舟券」から開いたとき: #site=1&ev=1.1&prob=0.1&budget=3000&points=5
+function siteText(o) {
+  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1点100円）"}・点数 ${o.site_points || "決めない"}`;
+}
+async function fromSite() {
+  let h = location.hash.slice(1);
+  try { if (!h.startsWith("site=")) h = sessionStorage.getItem("siteHash") || ""; sessionStorage.removeItem("siteHash"); } catch (e) {}
+  if (!h.startsWith("site=")) return;
+  history.replaceState(null, "", "/");
+  const q = new URLSearchParams(h), num = (k, d) => { const v = q.get(k); return v === null || v === "" ? d : +v; };
+  const o = {strategy: "site", site_ev: num("ev", 1.1), site_prob: num("prob", 0.1), site_budget: num("budget", 0), site_points: num("points", 0)};
+  if (![o.site_ev, o.site_prob, o.site_budget, o.site_points].every(Number.isFinite) || o.site_prob > 1 || o.site_prob < 0 || o.site_budget < 0 || o.site_points < 0) {
+    say("サイトから来た設定が読めませんでした", true); return;
+  }
+  o.site_budget = Math.floor(o.site_budget); o.site_points = Math.floor(o.site_points);
+  if (!confirm("予想サイトで決めた設定を、自動投票の選び方にしますか？\n\n" + siteText(o) + "\n\n1日の上限（今の設定）は超えません。")) { say("サイトの設定は保存しませんでした"); return; }
+  try { await api("/api/settings", o); say("サイトの設定を保存しました。選び方は「サイトの設定」になりました"); filled = false; loadPlan(); }
+  catch (e) { say("保存できませんでした: " + e.message, true); }
+}
 // 合言葉付きの URL で開いたら、アドレス欄から合言葉を消す (ブラウザが覚えたので要らない)
 if (location.search.includes("t=")) history.replaceState(null, "", "/");
-refresh(); loadPlan(); loadResults();
+refresh(); loadPlan(); loadResults(); fromSite();
+window.addEventListener("hashchange", fromSite);  // パネルを開いたままサイトのボタンを押したとき
 </script>
 </body>
 </html>

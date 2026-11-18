@@ -284,7 +284,10 @@ button{font:inherit;padding:14px;border:0;border-radius:12px;background:var(--ac
 <p>パネルのパスワードを入れてください（設定で決めたもの）。まだ決めていなければ、合言葉（URL の t= の後ろ）でも入れます。</p>
 <input name="pw" type="password" autocomplete="current-password" autofocus required>
 <button>開く</button>%MSG%
-</form></body></html>"""
+</form><script>
+// 予想サイトから #site=… 付きで開いたとき、ログインの後も設定を受け取れるようにする
+if (location.hash.startsWith("#site=")) { try { sessionStorage.setItem("siteHash", location.hash.slice(1)); } catch (e) {} document.forms[0].action = "/login" + location.hash; }
+</script></body></html>"""
 
 
 def private(ip):

@@ -42,6 +42,11 @@ DEFAULTS = {
     "min_ev": 1.0,         # 期待値がこれ未満の艇は買わない (hit 以外)
     "min_odds": 1.0,       # 予想オッズがこれ未満の艇は買わない
     "per_race": 1,         # 1レースで買う最大の点数
+    # strategy = "site" のとき (予想サイトの「おすすめ舟券」で決めた条件)
+    "site_ev": 1.1,        # 期待値がこれ以上
+    "site_prob": 0.10,     # 1着確率がこれ以上 (0〜1)
+    "site_budget": 0,      # 1日の予算 (円)。0 = 決めない (1点100円)
+    "site_points": 0,      # 1日の点数。0 = 決めない
 }
 
 _lock = threading.Lock()
@@ -173,10 +178,14 @@ def save_settings(new):
             raise ValueError("1点の金額は100円単位にしてください")
         if d.get("cap", 4000) < d.get("stake", 100):
             raise ValueError("1日の上限は1点の金額以上にしてください")
-        if d.get("strategy") not in ("value", "model", "hit", "roi", "long"):
+        if d.get("strategy") not in ("value", "site", "model", "hit", "roi", "long"):
             d["strategy"] = "value"
         if not 1 <= d.get("per_race", 1) <= 6:
             raise ValueError("1レースの点数は1〜6にしてください")
+        if not 0 <= d.get("site_prob", 0.1) <= 1 or d.get("site_ev", 1.1) < 0:
+            raise ValueError("サイトの設定の期待値・1着確率がおかしいです")
+        if d.get("site_budget", 0) < 0 or d.get("site_points", 0) < 0:
+            raise ValueError("サイトの設定の予算・点数は0以上にしてください")
         if d.get("mode") not in ("test", "live"):
             d["mode"] = "test"
         for k in SECRET_KEYS:
