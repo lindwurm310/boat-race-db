@@ -252,9 +252,12 @@ def post(dry):
     if url and not (dry and os.environ.get("NOTE_FORCE") == "1"):  # 試運転だけ NOTE_FORCE=1 で重複チェックを飛ばせる
         return f"OK {date} {url}"
     body = article_body(j["html"])
-    img = os.path.join(HERE, "header.png")
-    with open(img, "wb") as f:
-        f.write(get(BASE + j["image"], binary=True))
+    # 見出し画像: header_fixed.png (無料記事「必勝法」の見出し画像) があれば毎日それを使う。なければその日の画像
+    img = os.path.join(HERE, "header_fixed.png")
+    if not os.path.exists(img):
+        img = os.path.join(HERE, "header.png")
+        with open(img, "wb") as f:
+            f.write(get(BASE + j["image"], binary=True))
 
     with sync_playwright() as p:
         ctx = browser(p)
