@@ -829,7 +829,8 @@ const PAGES = {
   osusume: {title: "おすすめ舟券", async render(el) {
     // 自動投票パネルの「回収率重視（おすすめ）」と同じ選び方: 単勝で、期待値 (1着確率 × 予想オッズ) が1.1以上、
     // 1着確率10%以上の艇を、期待値の高い順に並べる。予算と点数を入れると、上から順に絞って1点の金額を決める。
-    let cfg = {mode: "all", budget: "", points: "", ev: "1.1", prob: "0.1", open: true};
+    // 初期値は「毎日1,000円で上位3点を300円ずつ」(過去5年の検証で回収率が一番高く、年ごとにも安定していた。analysis/osusume/)
+    let cfg = {mode: "budget", budget: "1000", points: "3", ev: "1.1", prob: "0.1", open: true};
     try { cfg = {...cfg, ...JSON.parse(localStorage.getItem("osusume") || "{}")}; } catch {}
     const save = () => { try { localStorage.setItem("osusume", JSON.stringify(cfg)); } catch {} };
     const d = h("input", {type: "date", value: state.date || today()});
@@ -985,7 +986,8 @@ const PAGES = {
         h("h3", {style: "margin-top:0", textContent: "おすすめ舟券 (単勝・回収率重視)"}),
         h("p", {className: "note", style: "margin:0"}, "「当たる確率のわりに配当が高い」単勝を、期待値の高い順に並べています。期待値 = 1着確率 × 予想オッズ。" +
           "期待値1.1以上・1着確率10%以上の艇が対象で、自動投票パネルの「回収率重視（おすすめ）」と同じ選び方です。" +
-          "過去約2年の検証では的中率 約40%・回収率 約106% でしたが、月によって85〜115%ほどぶれ、プラスになる保証はありません。" +
+          "過去5年 (2021年10月〜2026年10月) の検証では、毎日1,000円なら「期待値の高い順に3点を300円ずつ」が一番よく、回収率 約123% (年ごとに115〜145%)。" +
+          "それでも月ごとでは5か月に1回ほどマイナスで、悪い月は80%前後まで下がります。プラスになる保証はありません。" +
           "予想オッズは前日までのデータから見積もったもので、実際のオッズが低いと期待値が下がります。買う前に「直前情報」でオッズを確かめてください。")),
       h("div", {className: "bar"}, d, h("label", {}, openCb, " 締切前のレースだけ (今日の分)")),
       modeSel, budgetBox, adv, panelCard, out);
