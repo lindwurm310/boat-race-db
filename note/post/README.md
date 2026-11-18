@@ -1,10 +1,10 @@
 # Note への毎日17時の自動投稿
 
 1. 毎日 16:00（予備 16:30）に GitHub Actions の `note-daily` が明日の予想をして、記事の本文・見出し画像・
-   `latest.json`（タイトル・価格300円・ハッシュタグ5つ）を GitHub Pages の `note/` に置く。
+   `latest.json`（タイトル・価格100円・ハッシュタグ5つ）を GitHub Pages の `note/` に置く。
 2. 毎日 17:00 にあきさんのパソコンのタスク `BoatRaceNotePost` が `note_post.bat` を動かす。
    まず `note_post.py`（Python + Playwright。専用プロファイルの Microsoft Edge を操作）が note.com に
-   下書き作成 → タイトル・本文・見出し画像 → 有料300円・タグ5つ・有料ライン → 投稿 まで行う（Claude は使わない）。
+   下書き作成 → タイトル・本文・見出し画像 → 有料100円・タグ5つ・有料ライン → 投稿 まで行う（Claude は使わない）。
    公開できたら、Claude Code（`claude -p`）が `x_prompt.md` の手順で Edge の X（@BoatRace__B）に投稿とフォローをする。
 3. 結果は `log/YYYY-MM-DD.txt` に残る（`OK` / `SKIP` / `NG`、`XOK` / `XNG`、`FOLLOW` / `FNG`）。19:00 まで30分ごとにもう一度動く
    （note は1日3回、X は1日2回まで。終わっていればすぐ終わる）。note_post.py の画面写真は `log/*.png`。
