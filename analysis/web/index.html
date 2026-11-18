@@ -826,6 +826,144 @@ const PAGES = {
     load();
   }},
 
+  osusume: {title: "おすすめ舟券", async render(el) {
+    // 自動投票パネルの「回収率重視（おすすめ）」と同じ選び方: 単勝で、期待値 (1着確率 × 予想オッズ) が1.1以上、
+    // 1着確率10%以上の艇を、期待値の高い順に並べる。予算と点数を入れると、上から順に絞って1点の金額を決める。
+    let cfg = {mode: "all", budget: "", points: "", ev: "1.1", prob: "0.1", open: true};
+    try { cfg = {...cfg, ...JSON.parse(localStorage.getItem("osusume") || "{}")}; } catch {}
+    const save = () => { try { localStorage.setItem("osusume", JSON.stringify(cfg)); } catch {} };
+    const d = h("input", {type: "date", value: state.date || today()});
+    const out = h("div");
+    let pred = null, check = null;
+    const nowJst = () => new Date(Date.now() + 9 * 3600e3).toISOString();
+    const candidates = () => {
+      const list = [];
+      for (const r of pred.rows) for (let l = 1; l <= 6; l++) {
+        const p = +r[`${l}号艇`], o = +r[`${l}号艇の予想オッズ`];
+        if (!(p > 0) || !(o > 0)) continue;
+        const ev = p * o;
+        if (ev >= +cfg.ev && p >= +cfg.prob) list.push({r, l, p, o, ev});
+      }
+      return list.sort((a, b) => b.ev - a.ev);
+    };
+    const draw = () => {
+      if (!pred) return;
+      const isToday = d.value === nowJst().slice(0, 10);
+      const now = nowJst().slice(11, 16);
+      let all = candidates();
+      const closed = isToday && cfg.open ? all.filter(c => String(c.r["締切"] || "99:99") <= now).length : 0;
+      if (isToday && cfg.open) all = all.filter(c => String(c.r["締切"] || "99:99") > now);
+      let pick = all, unit = 100, msg = "";
+      if (cfg.mode === "budget") {
+        const B = Math.floor(+cfg.budget || 0), N = Math.floor(+cfg.points || 0);
+        let n = all.length;
+        if (N > 0) n = Math.min(n, N);
+        if (B > 0) n = Math.min(n, Math.floor(B / 100));
+        pick = all.slice(0, n);
+        unit = B > 0 && n ? Math.max(100, Math.floor(B / n / 100) * 100) : 100;
+        if (!B && !N) msg = "予算か点数を入れると、期待値の高い順に絞り込みます。";
+        else if (B > 0 && B < 100) msg = "予算は100円以上にしてください (1点100円から)。";
+        else if (N > 0 && all.length < N) msg = `おすすめが ${all.length}点しかないので、${n}点にしています。`;
+        else if (N > 0 && n < N) msg = `予算が1点100円で ${n}点分なので、${n}点にしています。`;
+        if (B > 0 && n) {
+          const rest = B - unit * n;
+          msg += `${msg ? " " : ""}予算 ${money(B)} を ${n}点で分けて、1点 ${money(unit)}${rest > 0 ? ` (余り ${money(rest)})` : ""}。`;
+        }
+      }
+      const res = c => {
+        if (!check) return null;
+        const k = check.rows.find(x => x.race_id === c.r.race_id);
+        if (!k || !k["結果"]) return null;
+        const win = String(k["結果"]).split("-")[0];
+        return {hit: win === String(c.l), pay: win === String(c.l) ? (+k["単勝配当"] || 0) * unit / 100 : 0, res: k["結果"]};
+      };
+      const rows = pick.map((c, i) => ({...c, i: i + 1, k: res(c)}));
+      const cost = unit * rows.length;
+      const expHit = rows.reduce((a, c) => a + c.p, 0);
+      const expPay = rows.reduce((a, c) => a + c.ev * unit, 0);
+      const done = rows.filter(c => c.k);
+      const kp = [
+        kpi("点数", `${rows.length}点`, "pred"),
+        kpi("合計金額", money(cost), "pred"),
+        kpi("見込みの的中", rows.length ? `約${expHit.toFixed(1)}点 (${pct0(expHit / rows.length)})` : "-", "pred"),
+        kpi("見込みの払戻 (予想オッズで)", rows.length ? `${money(expPay)} (${pct0(expPay / cost)})` : "-", "pred"),
+      ];
+      if (done.length) {
+        const got = done.reduce((a, c) => a + c.k.pay, 0), dc = unit * done.length;
+        kp.push(kpi(`結果 (${done.length}点の答え合わせ)`, `${done.filter(c => c.k.hit).length}点的中 ${money(got)}`, "real"),
+          kpi("結果の回収率", pct0(got / dc), "real"));
+      }
+      const cols = [["順位", "i"], ["締切", c => c.r["締切"]], ["場", c => jo(c.r["場"])], ["R", c => c.r["R"]],
+        ["単勝", c => lane(c.l)], ["選手", c => String(c.r["本命"]) === String(c.l) ? c.r["本命選手"] : "", "l"],
+        ["1着確率", c => pct0(c.p)], ["予想オッズ", c => c.o.toFixed(1) + "倍"],
+        ["期待値", c => h("b", {textContent: c.ev.toFixed(2)})], ["金額", c => money(unit)]];
+      if (check) cols.push(["結果", c => !c.k ? "結果待ち" : h("span", {className: c.k.hit ? "ok" : "err", textContent: c.k.hit ? `的中 ${money(c.k.pay)}` : `外れ (${c.k.res})`})]);
+      cols.push(["公式", c => raceLink(c.r, d.value)]);
+      out.replaceChildren(
+        msg ? h("p", {className: "note", textContent: msg}) : "",
+        h("div", {className: "kpis"}, ...kp),
+        closed ? h("p", {className: "note", textContent: `締切を過ぎた ${closed}点は出していません (「締切前のレースだけ」を外すと出ます)。`}) : "",
+        rows.length ? table(cols, rows, () => "", "osusume" + (check ? "k" : ""))
+          : h("p", {}, all.length ? "予算・点数の条件に合う舟券がありません。" : closed ? "今日のおすすめは全部締切を過ぎました。" : "この日はおすすめの条件に合う舟券がありません。",
+            !all.length && isToday ? h("button", {className: "btn sub", style: "margin-left:8px", textContent: "明日のおすすめを見る",
+              onclick: () => { d.value = addDays(d.value, 1); load(); }}) : ""));
+    };
+    const load = async () => {
+      state.date = d.value;
+      pred = check = null;
+      out.replaceChildren(h("div", {className: "note", textContent: "読み込み中…"}));
+      try {
+        pred = await api(`/api/predictions?date=${d.value}`);
+      } catch (e) {
+        out.replaceChildren(h("p", {}, e.message, hint("。「今日の予想」で予想してください。")));
+        return;
+      }
+      check = await api(`/api/check?date=${d.value}`).catch(() => null);
+      draw();
+    };
+    const num = (key, ph, step) => {
+      const e = h("input", {type: "number", min: 0, step, placeholder: ph, value: cfg[key], inputMode: "numeric",
+        style: "width:110px;font:inherit;padding:4px 6px;border:1px solid var(--line);border-radius:4px",
+        oninput: () => { cfg[key] = e.value; save(); draw(); }});
+      return e;
+    };
+    const budgetBox = h("div", {className: "bar"},
+      h("label", {}, "予算 ", num("budget", "例: 3000", 100), " 円"),
+      h("label", {}, "点数 ", num("points", "例: 5", 1), " 点まで"));
+    const modeSel = h("div", {className: "bar"});
+    const setMode = m => {
+      cfg.mode = m; save();
+      modeSel.querySelectorAll("button").forEach(b => b.className = "btn" + (b.dataset.m === m ? "" : " sub"));
+      budgetBox.style.display = m === "budget" ? "" : "none";
+      draw();
+    };
+    modeSel.append(h("button", {textContent: "全部のおすすめを見る", dataset: {m: "all"}, onclick: () => setMode("all")}),
+      h("button", {textContent: "予算と点数でしぼる", dataset: {m: "budget"}, onclick: () => setMode("budget")}));
+    const openCb = h("input", {type: "checkbox", checked: cfg.open, onchange: () => { cfg.open = openCb.checked; save(); draw(); }});
+    const sel = (key, opts) => {
+      const e = h("select", {onchange: () => { cfg[key] = e.value; save(); draw(); }}, opts.map(([v, t]) => h("option", {value: v, textContent: t})));
+      e.value = cfg[key];
+      return e;
+    };
+    const adv = h("details", {className: "card"}, h("summary", {textContent: "おすすめの条件を変える"}),
+      h("div", {className: "bar", style: "margin-top:8px"},
+        h("label", {}, "期待値 ", sel("ev", [["1.0", "1.0以上"], ["1.1", "1.1以上 (おすすめ)"], ["1.2", "1.2以上"], ["1.3", "1.3以上"], ["1.5", "1.5以上"]])),
+        h("label", {}, "1着確率 ", sel("prob", [["0", "しぼらない"], ["0.1", "10%以上 (おすすめ)"], ["0.2", "20%以上"], ["0.3", "30%以上"], ["0.5", "50%以上"]]))),
+      h("p", {className: "note", textContent: "期待値の下限を上げると点数が減り、1着確率の下限を上げると的中率は上がりますが配当は下がります。"}));
+    d.onchange = load;
+    el.append(
+      h("div", {className: "card"},
+        h("h3", {style: "margin-top:0", textContent: "おすすめ舟券 (単勝・回収率重視)"}),
+        h("p", {className: "note", style: "margin:0"}, "「当たる確率のわりに配当が高い」単勝を、期待値の高い順に並べています。期待値 = 1着確率 × 予想オッズ。" +
+          "期待値1.1以上・1着確率10%以上の艇が対象で、自動投票パネルの「回収率重視（おすすめ）」と同じ選び方です。" +
+          "過去約2年の検証では的中率 約40%・回収率 約106% でしたが、月によって85〜115%ほどぶれ、プラスになる保証はありません。" +
+          "予想オッズは前日までのデータから見積もったもので、実際のオッズが低いと期待値が下がります。買う前に「直前情報」でオッズを確かめてください。")),
+      h("div", {className: "bar"}, d, h("label", {}, openCb, " 締切前のレースだけ (今日の分)")),
+      modeSel, budgetBox, adv, out);
+    setMode(cfg.mode === "budget" ? "budget" : "all");
+    load();
+  }},
+
   calendar: {title: "カレンダー", async render(el) {
     const src = h("select", {}, [["", "実際に予想した分"], ["backtest", "過去10年の検証 (予想し直し)"]].map(([v, t]) => h("option", {value: v, textContent: t})));
     src.value = state.calSrc || "";
