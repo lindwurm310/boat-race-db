@@ -977,8 +977,8 @@ const PAGES = {
         h("button", {className: "btn", textContent: "この設定を自動投票パネルで使う", onclick: sendPanel}),
         h("button", {className: "btn sub", textContent: "パネルの URL", onclick: () => { urlBox.style.display = urlBox.style.display ? "" : "none"; }})),
       urlBox,
-      h("p", {className: "note", style: "margin:4px 0 0"}, "押すと自動投票パネルが開き、ここで決めた選び方・予算・点数を使うか聞かれます。" +
-        "パネルでは、実行した時点で締切前のレースから同じ計算で選びます。初めて押すときだけ、パネルの URL を入れてください (この端末にだけ保存します)。"));
+      h("p", {className: "note", style: "margin:4px 0 0"}, "押すと自動投票パネルが開き、ここで決めた選び方・予算・点数を使うか聞かれます。OK を押すと、パネルの選び方が「サイトの設定」に切り替わります。" +
+        "パネルでは、実行した時点で締切前のレースから同じ計算で選びます。今日すでに買った分は予算と点数から引き、パネルの「1日の上限」を超える分は買いません。初めて押すときだけ、パネルの URL を入れてください (この端末にだけ保存します)。"));
     d.onchange = load;
     el.append(
       h("div", {className: "card"},
