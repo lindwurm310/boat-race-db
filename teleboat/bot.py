@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18g"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-18h"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -149,19 +149,26 @@ def plan(all_picks, settings, state, balance=None, now=None):
     if settings.get("strategy") == "value":
         settings = dict(settings, site_budget=VALUE_BUDGET, site_points=VALUE_POINTS, site_from=VALUE_FROM)
     if settings.get("strategy") in ("site", "value"):
-        # サイトと同じ計算: n = min(候補数, 点数, 予算/100)、1点 = 予算/n を100円単位で切り捨て (最低100円)。
-        # 今日すでに買った分は予算と点数から差し引く。1日の上限 (cap) は超えない
+        # サイトと同じ計算:
+        #   点数を決めたとき: 1点 = 予算 ÷ 点数 (100円単位で切り捨て、最低100円)。点数 = min(点数, 予算/100)。
+        #     候補が少ない日も1点の金額は上げない。今日買った分を差し引いても1点の金額は同じ
+        #   点数を決めないとき: 残りの予算を候補数で割る。予算も決めないときは1点100円
+        # 1日の上限 (cap) は超えない
         budget, points = int(settings.get("site_budget") or 0), int(settings.get("site_points") or 0)
-        bud_left = budget - state.get("spent", 0) if budget else None
-        pts_left = points - len(bought) if points else None
+        spent = state.get("spent", 0)
         n = len(by_ev)
-        if pts_left is not None:
-            n = min(n, max(0, pts_left))
-        if bud_left is not None:
-            n = min(n, max(0, bud_left) // 100)
-        stake = max(100, bud_left // n // 100 * 100) if bud_left and n > 0 else 100
-        if settings.get("strategy") == "value":  # 回収率重視は候補が3点に満たない日も1点300円のまま (検証と同じ)
-            stake = VALUE_BUDGET // VALUE_POINTS // 100 * 100
+        if budget and points:
+            pts = min(points, budget // 100)
+            stake = max(100, budget // pts // 100 * 100) if pts else 100
+            n = min(n, max(0, pts - len(bought)), max(0, budget - spent) // stake)
+        elif points:
+            stake = 100
+            n = min(n, max(0, points - len(bought)))
+        elif budget:
+            n = min(n, max(0, budget - spent) // 100)
+            stake = max(100, (budget - spent) // n // 100 * 100) if n else 100
+        else:
+            stake = 100
         if n * stake > room:
             note = f"1日の上限 {cap:,}円 を超えるので {room // stake}点 に減らしました"
             n = room // stake
