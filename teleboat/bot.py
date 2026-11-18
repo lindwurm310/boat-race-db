@@ -160,6 +160,8 @@ def plan(all_picks, settings, state, balance=None, now=None):
         if bud_left is not None:
             n = min(n, max(0, bud_left) // 100)
         stake = max(100, bud_left // n // 100 * 100) if bud_left and n > 0 else 100
+        if settings.get("strategy") == "value":  # 回収率重視は候補が3点に満たない日も1点300円のまま (検証と同じ)
+            stake = VALUE_BUDGET // VALUE_POINTS // 100 * 100
         if n * stake > room:
             note = f"1日の上限 {cap:,}円 を超えるので {room // stake}点 に減らしました"
             n = room // stake
