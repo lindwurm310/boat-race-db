@@ -6,7 +6,7 @@
   python analysis/yosou.py predict --date 2026-10-26   番組表を取得してその日の全レースを予想
   python analysis/yosou.py live                  締切30分以内のレースの直前情報とオッズを取って、おすすめの買い目を表示
   python analysis/yosou.py check   --date 2026-10-26   成績を取得して答え合わせ・外れの原因・3連単/3連複の買い方ごとの収支を集計 (当日は結果ページから)
-  python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 7日ごとに学習し直す
+  python analysis/yosou.py daily                 毎日1回: 成績の取り込み → 昨日の答え合わせ → 毎日学習し直す
   python analysis/yosou.py racer --no 4444       選手の成績 (1着率・枠別の1着率・回収率)。--no なしで全選手の CSV
   python analysis/yosou.py week                  今日から1週間のうち、番組表が出ている日をまとめて予想 (ふつう今日と明日)
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
@@ -41,7 +41,7 @@ sys.path.insert(0, ROOT)
 import build_db  # noqa: E402
 import fetch  # noqa: E402
 import seiseki  # noqa: E402
-from predict import (V4_FEATS, V4_LATE, PERMS2, PERMS3, Predictor, expected_value, features, fit_odds, load,  # noqa: E402
+from predict import (V5_FEATS, V5_LATE, PERMS2, PERMS3, Predictor, expected_value, features, fit_odds, load,  # noqa: E402
                      win_payouts)
 import lightgbm as lgb  # noqa: E402
 
@@ -117,15 +117,15 @@ def cmd_train(a):
     df = features(raw).merge(win_payouts(pay), on=["race_id", "lane"], how="left")
     tr, va = df[(df.race_date >= warm) & (df.race_date < val)], df[df.race_date >= val]
     print(f"学習 {warm}〜{val} {tr.race_id.nunique()}レース / 検証 {val}〜{end} {va.race_id.nunique()}レース")
-    pr = Predictor(V4_FEATS, "v3").fit(tr, va)
+    pr = Predictor(V5_FEATS, "v3").fit(tr, va)
     P, Q = pr.probs(va)
     win = va.pivot(index="race_id", columns="lane", values="win").loc[P.index].values
     print(f"検証期間の本命1着率 {(win[np.arange(len(P)), P.values.argmax(1)] == 1).mean():.1%}")
     pr.save(a.model)
     if not a.no_late:  # 直前情報 (展示タイムなど) も使うモデル。live で使う
         print("直前情報のモデルを学習します")
-        Predictor(V4_LATE, "v3").fit(tr, va).save(os.path.join(a.model, "late"))
-    om = fit_odds(tr, va, V4_FEATS)
+        Predictor(V5_LATE, "v3").fit(tr, va).save(os.path.join(a.model, "late"))
+    om = fit_odds(tr, va, V5_FEATS)
     om.save_model(os.path.join(a.model, "odds.txt"), num_iteration=om.best_iteration)
     with open(os.path.join(a.model, "trained.json"), "w", encoding="utf-8") as f:
         json.dump(dict(data_end=end, train=[warm, val], val=[val, end]), f, ensure_ascii=False)
@@ -160,7 +160,7 @@ def program(date, raw):
     for text in texts:
         for jcd, body in build_db.split_blocks(text, "B"):
             races, entries = build_db.parse_b(date, jcd, body, [])
-            info = {r[0]: dict(jcd=r[2], rno=r[3], race_type=r[4], deadline=r[6]) for r in races}
+            info = {r[0]: dict(jcd=r[2], rno=r[3], race_type=r[4], deadline=r[6], day_no=r[8]) for r in races}
             for e in entries:
                 rows.append(dict(zip(ENTRY_COLS, e)) | info[e[0]] | dict(race_date=date))
     return pd.DataFrame(rows)
@@ -195,7 +195,7 @@ def pred_table(pr, df, info, names, venue, om):
     ex, tri = pr.orders(P, Q)
     EV = None
     if om is not None:
-        odds, EV = expected_value(df, P, om, V4_FEATS)
+        odds, EV = expected_value(df, P, om, om.feature_name())  # オッズのモデルを学習した特徴量
     rows = []
     for n, rid in enumerate(P.index):
         p = P.values[n]
@@ -337,7 +337,7 @@ def compare(pred, races, res, pay):
                          風速=races.at[rid, "wind_speed"], 波=races.at[rid, "wave_cm"],
                          本命1着=order[0] == fav, 本命3着以内=f.get(fav) in (1, 2, 3),
                          予想着順的中=r["予想着順"] == actual, 上位5点的中=actual in tickets,
-                         三連単配当=pay3.get((rid, actual)),
+                         三連単配当=pay3.get((rid, actual)), 単勝配当=tan.get((rid, order[0])) if order[0] else None,
                          **({"3連単上位5点の的中確率": r["3連単上位5点の的中確率"]} if "3連単上位5点の的中確率" in r else {}),
                          **ev_check(r, rid, tan)))
     return pd.DataFrame(rows)
@@ -480,7 +480,7 @@ def recommend(d, lv, models, stats):
     P, Q = pr.probs(d)
     _, tri = pr.orders(P, Q)
     top5 = ["-".join(str(x + 1) for x in PERMS3[k]) for k in np.argsort(-tri[0])[:5]]
-    odds_hat, ev_hat = expected_value(d, P, om, V4_FEATS)
+    odds_hat, ev_hat = expected_value(d, P, om, om.feature_name())
     p, oh, eh = P.values[0], odds_hat.values[0], ev_hat.values[0]
     rows, logs = [], []
     for l in range(1, 7):
@@ -802,8 +802,8 @@ def cmd_backtest(a):
         te = df[d >= t0.isoformat()]
         print(f"学習 {tr.race_id.nunique()}レース / 検証 {va.race_id.nunique()}レース / 予想 {te.race_id.nunique()}レース",
               flush=True)
-        pr = Predictor(V4_FEATS, "v3").fit(tr, va)
-        om = fit_odds(tr, va, V4_FEATS)
+        pr = Predictor(V5_FEATS, "v3").fit(tr, va)
+        om = fit_odds(tr, va, V5_FEATS)
         con = sqlite3.connect(a.db)
         info = pd.read_sql_query("SELECT race_id, jcd, rno, deadline, technique, wind_speed, wave_cm FROM races "
                                  "WHERE race_date >= ? AND race_date <= ?", con,
@@ -832,7 +832,7 @@ def cmd_backtest(a):
 
 # ---------------- daily: 結果の取り込み → 答え合わせ → 再学習 ----------------
 def cmd_daily(a):
-    """毎日1回。昨日までの成績を DB に取り込み、昨日の予想を答え合わせし、7日ごとにモデルを学習し直す。"""
+    """毎日1回。昨日までの成績を DB に取り込み、昨日の予想を答え合わせし、新しいデータがあればモデルを学習し直す。"""
     cmd_update(a)
     yday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
     if os.path.exists(day_path(yday, ".csv")):
@@ -884,7 +884,7 @@ def main():
     ap.add_argument("--within", type=int, default=30, help="live: 締切まで何分以内のレースを見るか")
     ap.add_argument("--all", action="store_true", help="live: その日の全レースを見る (時間がかかる)")
     ap.add_argument("--race", help="live: 1レースだけ。場コード-レース番号 (例: 01-12)")
-    ap.add_argument("--retrain-days", type=int, default=7, help="daily: 何日ごとに学習し直すか")
+    ap.add_argument("--retrain-days", type=int, default=1, help="daily: 何日ごとに学習し直すか (既定: 毎日)")
     ap.add_argument("--no", type=int, help="racer: 登録番号")
     ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")

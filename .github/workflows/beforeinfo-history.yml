@@ -1,0 +1,45 @@
+name: beforeinfo-history
+# 検証用: 過去の直前情報 (スタート展示・チルト・体重・部品交換) を集める。analysis/extra/run.json を変えて push すると動く。
+# 1ジョブは1秒に1回までアクセス。同時に動かすのは run.json の parallel 個まで。
+on:
+  push:
+    branches: [claude/project-thread-0rd6pc]
+    paths: [analysis/extra/run.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.p.outputs.chunks }}
+      parallel: ${{ steps.p.outputs.parallel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          echo "chunks=$(jq -c .chunks analysis/extra/run.json)" >> "$GITHUB_OUTPUT"
+          echo "parallel=$(jq -c .parallel analysis/extra/run.json)" >> "$GITHUB_OUTPUT"
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      max-parallel: ${{ fromJson(needs.plan.outputs.parallel) }}
+      fail-fast: false
+      matrix:
+        c: ${{ fromJson(needs.plan.outputs.chunks) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas
+      - run: python analysis/extra/collect_beforeinfo.py --races analysis/extra/races_2021-10-25.csv.gz --start ${{ matrix.c.s }} --end ${{ matrix.c.e }} --out bi_${{ matrix.c.s }}.jsonl.gz ${{ matrix.c.limit && format('--limit {0}', matrix.c.limit) || '' }}
+      - name: Release (検証用データ置き場) に置く
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view bi-history --repo ${{ github.repository }} >/dev/null 2>&1 || gh release create bi-history --repo ${{ github.repository }} --prerelease --title "検証用: 過去の直前情報" --notes "analysis/extra 用の生データ (beforeinfo のページの必要部分)" --target ${{ github.sha }} || true
+          gh release upload bi-history bi_${{ matrix.c.s }}.jsonl.gz --repo ${{ github.repository }} --clobber

@@ -1,0 +1,56 @@
+name: extra-backtest
+# 検証用: 追加の情報を足したモデルのバックテスト (analysis/extra/extra_bt.py)。公式サイトにはアクセスしない。
+# 1年ずつ別のジョブで動かし、結果を Release bi-history に extra_<set>_<年>.tar.gz で置く。
+# analysis/extra/bt.json ({"set": "morning", "years": 5, "only": [0,1,2,3,4]}) を変えて push すると動く。
+on:
+  push:
+    branches: [claude/project-thread-0rd6pc]
+    paths: [analysis/extra/bt.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      set: ${{ steps.p.outputs.set }}
+      years: ${{ steps.p.outputs.years }}
+      only: ${{ steps.p.outputs.only }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          echo "set=$(jq -r .set analysis/extra/bt.json)" >> "$GITHUB_OUTPUT"
+          echo "years=$(jq -r .years analysis/extra/bt.json)" >> "$GITHUB_OUTPUT"
+          echo "only=$(jq -c .only analysis/extra/bt.json)" >> "$GITHUB_OUTPUT"
+  bt:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        i: ${{ fromJson(needs.plan.outputs.only) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python analysis/yosou.py setup --db boatrace.sqlite
+      - name: 直前情報 (late のとき)
+        if: needs.plan.outputs.set == 'late'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir bi && gh release download bi-history --repo ${{ github.repository }} -p 'bi_*.jsonl.gz' -D bi
+          python analysis/extra/parse_beforeinfo.py bi/*.jsonl.gz --out beforeinfo.csv.gz
+      - run: python analysis/extra/extra_bt.py --db boatrace.sqlite --years ${{ needs.plan.outputs.years }} --only ${{ matrix.i }} --set ${{ needs.plan.outputs.set }} ${{ needs.plan.outputs.set == 'late' && '--bi beforeinfo.csv.gz' || '' }} --out out
+      - name: 結果を置く
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f out/corr_*.pkl.gz; for f in out/corr_*.pkl; do [ -f "$f" ] && gzip "$f"; done
+          tar czf extra_${{ needs.plan.outputs.set }}_${{ matrix.i }}.tar.gz out
+          gh release upload bi-history extra_${{ needs.plan.outputs.set }}_${{ matrix.i }}.tar.gz --repo ${{ github.repository }} --clobber

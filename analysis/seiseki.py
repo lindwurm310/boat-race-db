@@ -225,7 +225,25 @@ def build(out):
     c, k, lg = load(out)
     if c.empty:
         return None
-    last = dt.date.fromisoformat(c["日付"].max())
+    periods = by_period(c, k, lg)
+    recent = sorted(c["日付"].unique())[-RECENT_DAYS:]
+    out = {"periods": periods, "days": by_table(c[c["日付"].isin(recent)], k[k["日付"].isin(recent)] if len(k) else k, "日付")}
+    if c["日付"].str[:7].nunique() > 1:
+        out["months"] = by_table(c, k, "月")
+    if c["日付"].str[:4].nunique() > 1:
+        out["years"] = by_table(c, k, "年")
+    if "単勝点数" in c and "race_id" in c:  # 単勝の買い目があったレース (買いのレース) だけの成績。画面ではこちらがメイン
+        b = c[c["単勝点数"].fillna(0) > 0]
+        if len(b):
+            kb = k[k["race_id"].isin(b["race_id"])] if len(k) and "race_id" in k else k.iloc[0:0]
+            out["buy"] = {"periods": by_period(b, kb, pd.DataFrame(), like=c)}
+    return out
+
+
+def by_period(c, k, lg, like=None):
+    """期間 (全期間・直近1年・直近30日・直近7日) ごとの成績。like: 期間を決める元の表 (買いのレースだけのときは全レース)。"""
+    like = c if like is None else like
+    last = dt.date.fromisoformat(like["日付"].max())
     periods = {}
     for name, days in PERIODS:
         if days is None:
@@ -235,7 +253,7 @@ def build(out):
             cc = c[c["日付"] >= start]
             kk = k[k["日付"] >= start] if len(k) else k
             ll = lg[lg["date"] >= start] if len(lg) and "date" in lg else lg
-            if cc["日付"].nunique() == c["日付"].nunique():  # 全期間と同じなら出さない
+            if like[like["日付"] >= start]["日付"].nunique() == like["日付"].nunique() or cc.empty:  # 全期間と同じなら出さない
                 continue
         periods[name] = {"from": cc["日付"].min(), "to": cc["日付"].max(), "days": int(cc["日付"].nunique()),
                          "rows": summarize(cc, kk, ll)}
@@ -251,13 +269,7 @@ def build(out):
                 r["備考"] += f"。全期間 ({a['回収率']:.1%}) より良くなっている"
             elif d <= -TREND:
                 r["備考"] += f"。全期間 ({a['回収率']:.1%}) より悪くなっている"
-    recent = sorted(c["日付"].unique())[-RECENT_DAYS:]
-    out = {"periods": periods, "days": by_table(c[c["日付"].isin(recent)], k[k["日付"].isin(recent)] if len(k) else k, "日付")}
-    if c["日付"].str[:7].nunique() > 1:
-        out["months"] = by_table(c, k, "月")
-    if c["日付"].str[:4].nunique() > 1:
-        out["years"] = by_table(c, k, "年")
-    return out
+    return periods
 
 
 def show(s, out):

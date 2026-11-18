@@ -30,7 +30,8 @@ def load(db, start, end):
     SELECT e.race_id, r.race_date, r.jcd, r.rno, r.race_type, r.wind_speed, r.wave_cm,
            e.lane, e.racer_no, e.age, e.weight, e.class, e.nat_win_rate, e.nat_2_rate,
            e.loc_win_rate, e.loc_2_rate, e.motor_2_rate, e.boat_2_rate, e.series_results,
-           r.wind_dir, x.exhibition_time, x.course, x.start_timing, x.finish_raw, x.finish
+           r.wind_dir, x.exhibition_time, x.course, x.start_timing, x.finish_raw, x.finish,
+           e.motor_no, e.boat_no, r.day_no
     FROM entries e JOIN races r USING (race_id)
     LEFT JOIN results x ON x.race_id = e.race_id AND x.lane = e.lane
     WHERE e.race_id >= ? AND e.race_id < ?"""
@@ -146,6 +147,8 @@ def features(df, require_result=True):
     df["n_a1"] = g["cls"].transform(lambda s: (s == 4).sum())
     df["wind_dir_c"] = df["wind_dir"].astype("category").cat.codes
     racer_features(df, h)
+    if {"motor_no", "boat_no", "day_no"} <= set(df.columns):
+        df = motor_meet_features(df)
     return df
 
 
@@ -226,6 +229,86 @@ def h2h(df):
     df["h2h_n"] = pd.Series(count.ravel(), index=srt.index).reindex(df.index)
 
 
+def periods(df, col):
+    """場ごとのモーター (ボート) の入れ替え日。番組表の2連率がほぼ全艇 0 の節の初日を入れ替えとみなす。"""
+    d = df[["jcd", "race_date", "day_no", col]].copy()
+    d["meet_start"] = pd.to_datetime(d["race_date"]) - pd.to_timedelta(d["day_no"].fillna(1) - 1, unit="D")
+    first = d[d["day_no"] == 1].groupby(["jcd", "meet_start"])[col].agg(lambda s: (s == 0).mean())
+    ren = first[first >= 0.9].reset_index()[["jcd", "meet_start"]]
+    return ren
+
+
+def period_id(df, col):
+    ren = periods(df, col)
+    t = pd.to_datetime(df["race_date"])
+    out = pd.Series(0, index=df.index)
+    for jcd, g in ren.groupby("jcd"):
+        m = df["jcd"] == jcd
+        out[m] = np.searchsorted(np.sort(g["meet_start"].values), t[m].values, side="right")
+    return out
+
+
+def motor_meet_features(df):
+    """v5: モーター・ボートの今期 (その場の入れ替えから) の成績と、選手の今節 (前日まで)・当地の成績を足す。
+    枠番から期待される着との差で見る。analysis/extra/README.md の検証で、モーターと今節を足すと的中率・回収率が上がった。"""
+    done = df["finish_raw"].notna()
+    lane_base = df[done].groupby("lane")["win"].mean()
+    t3_base = df[done].assign(t3=df["finish"] <= 3).groupby("lane")["t3"].mean()
+    h = pd.DataFrame(index=df.index)
+    h["n"] = done.astype(int)
+    h["w"] = df["win"] * done
+    h["t3"] = ((df["finish"] <= 3) & done).astype(int)
+    h["ew"] = df["lane"].map(lane_base) * h["n"]
+    h["e3"] = df["lane"].map(t3_base) * h["n"]
+    st = df["start_timing"].map(parse_st)
+    h["st_n"] = st.notna().astype(int)
+    h["st_s"] = st.fillna(0)
+    ex = df["exhibition_time"].where(df["exhibition_time"] > 0)
+    exd = ex - ex.groupby(df["race_id"]).transform("min")
+    h["ex_n"] = exd.notna().astype(int)
+    h["ex_s"] = exd.fillna(0)
+    h["race_date"] = df["race_date"]
+    for c in ["jcd", "racer_no", "motor_no", "boat_no"]:
+        h[c] = df[c]
+    h["mp"] = period_id(df, "motor_2_rate")
+    h["bp"] = period_id(df, "boat_2_rate")
+    meet_start = (pd.to_datetime(df["race_date"]) - pd.to_timedelta(df["day_no"].fillna(1) - 1, unit="D"))
+    h["meet"] = meet_start.dt.strftime("%Y%m%d")
+    cols = ["n", "w", "t3", "ew", "e3", "st_n", "st_s", "ex_n", "ex_s"]
+    out = {}
+    k = 10
+
+    def skill(r, name, kk=k):
+        out[f"{name}_w"] = (r["w"] - r["ew"]) / (r["n"] + kk)
+        out[f"{name}_t3"] = (r["t3"] - r["e3"]) / (r["n"] + kk)
+        out[f"{name}_n"] = r["n"]
+
+    st_mean = st.mean()
+    # モーター・ボートの今期の成績 (乗った選手は節ごとに違う)
+    r = history(h, ["jcd", "motor_no", "mp"], cols)
+    skill(r, "motor")
+    out["motor_ex"] = (r["ex_s"] + 5 * 0.1) / (r["ex_n"] + 5)  # 展示タイムの1位との差の平均
+    r = history_window(h, ["jcd", "motor_no", "mp"], cols, 60)
+    skill(r, "motor60")
+    r = history(h, ["jcd", "boat_no", "bp"], cols)
+    skill(r, "boat")
+    # 今節 (前日まで)。同じ節のあいだは同じモーター・ボートなので、モーターの節間成績でもある
+    r = history(h, ["racer_no", "jcd", "meet"], cols)
+    skill(r, "meet", 3)
+    out["meet_st"] = (r["st_s"] + 3 * st_mean) / (r["st_n"] + 3)
+    out["meet_ex"] = (r["ex_s"] + 3 * 0.1) / (r["ex_n"] + 3)
+    # 当地
+    r = history(h, ["racer_no", "jcd"], cols)
+    out["venue_t3"] = (r["t3"] - r["e3"]) / (r["n"] + 20)
+    out["venue_st"] = (r["st_s"] + 5 * st_mean) / (r["st_n"] + 5)
+    g = df.groupby("race_id")
+    out["weight_d"] = df["weight"] - g["weight"].transform("mean")
+    for c in ["motor_w", "motor_t3", "motor_ex", "boat_t3", "meet_w", "meet_t3", "meet_st", "meet_ex", "venue_t3",
+              "venue_st"]:
+        out[c + "_d"] = out[c] - out[c].groupby(df["race_id"]).transform("mean")
+    return pd.concat([df, pd.DataFrame(out, index=df.index)], axis=1)
+
+
 V1_FEATS = ["lane", "jcd", "rno", "age", "weight", "cls", "nat_win_rate", "nat_2_rate", "loc_win_rate",
             "loc_2_rate", "motor_2_rate", "boat_2_rate", "series_avg", "series_n", "series_fl", "vs_in", "final",
             "racer_lane_win", "racer_lane_n"] + [c + s for c in ["nat_win_rate", "loc_win_rate", "motor_2_rate",
@@ -245,6 +328,13 @@ V4_EXTRA = ([f"{a}_{b}" for a in ("skill_w", "skill_t3", "n") for b in ("all", "
 V4_FEATS = BASE_FEATS + V4_EXTRA
 # 直前情報 (展示タイム・風速・波高) も使う版。風向は公式サイトの表示と DB の表記の対応が取れないので使わない
 V4_LATE = V4_FEATS + ["exhibition_time", "ex_d", "ex_rk", "wind_speed", "wave_cm"]
+# v5: モーター・ボートの今期の成績と、今節・当地の成績 (motor_meet_features)。朝から使える
+MOTOR_MEET = ([f"{a}_{b}" for a in ("motor", "motor60", "boat", "meet") for b in ("w", "t3", "n")] +
+              ["motor_ex", "meet_st", "meet_ex", "venue_t3", "venue_st", "weight_d"] +
+              [c + "_d" for c in ["motor_w", "motor_t3", "motor_ex", "boat_t3", "meet_w", "meet_t3", "meet_st", "meet_ex",
+                                  "venue_t3", "venue_st"]])
+V5_FEATS = V4_FEATS + MOTOR_MEET
+V5_LATE = V5_FEATS + ["exhibition_time", "ex_d", "ex_rk", "wind_speed", "wave_cm"]
 # (名前, 特徴量, 学習方法)。"v3" = 1着は softmax、2・3着は Plackett-Luce の2モデルを組み合わせる
 MODELS = {"v1前日": (V1_FEATS, "binary"), "v1直前": (V1_FEATS + LATE[:-1], "binary"),
           "v2前日": (BASE_FEATS, "binary"), "v2直前": (LATE_FEATS, "binary"),
