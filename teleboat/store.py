@@ -47,6 +47,7 @@ DEFAULTS = {
     "site_prob": 0.10,     # 1着確率がこれ以上 (0〜1)
     "site_budget": 0,      # 1日の予算 (円)。0 = 決めない (1点100円)
     "site_points": 0,      # 1日の点数。0 = 決めない
+    "site_from": "",       # 締切がこの時刻 (HH:MM) より前のレースは買わない。空 = しぼらない
 }
 
 _lock = threading.Lock()
@@ -186,6 +187,14 @@ def save_settings(new):
             raise ValueError("サイトの設定の期待値・1着確率がおかしいです")
         if d.get("site_budget", 0) < 0 or d.get("site_points", 0) < 0:
             raise ValueError("サイトの設定の予算・点数は0以上にしてください")
+        sf = str(d.get("site_from") or "").strip()
+        if sf:
+            import re
+            m = re.fullmatch(r"(\d{1,2}):(\d{2})", sf)
+            if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+                raise ValueError("サイトの設定の時刻は 11:00 のように入れてください")
+            sf = f"{int(m.group(1)):02d}:{m.group(2)}"
+        d["site_from"] = sf
         if d.get("mode") not in ("test", "live"):
             d["mode"] = "test"
         for k in SECRET_KEYS:

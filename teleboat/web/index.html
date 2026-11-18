@@ -101,7 +101,7 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
         <label>買う舟券の選び方（単勝）
           <select id="strategy">
             <option value="site">サイトの設定（予想サイトの「おすすめ舟券」で決めた条件）</option>
-            <option value="value">回収率重視（おすすめ）: 期待値1.1以上・1着確率10%以上の上位3点を1点300円</option>
+            <option value="value">回収率重視（おすすめ）: 締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点を1点300円</option>
             <option value="model">予想モデルの買い目（期待値1以上）</option>
             <option value="hit">的中率の高い順（各レースの本命）※回収率は低め</option>
             <option value="roi">回収率（期待値）の高い順</option>
@@ -272,7 +272,7 @@ $("newToken").onclick = async () => {
 };
 // 予想サイトの「おすすめ舟券」から開いたとき: #site=1&ev=1.1&prob=0.1&budget=3000&points=5
 function siteText(o) {
-  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1点100円）"}・点数 ${o.site_points || "決めない"}`;
+  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1点100円）"}・点数 ${o.site_points || "決めない"}・締切 ${o.site_from ? o.site_from + "以降" : "決めない"}`;
 }
 async function fromSite() {
   let h = location.hash.slice(1);
@@ -280,7 +280,8 @@ async function fromSite() {
   if (!h.startsWith("site=")) return;
   history.replaceState(null, "", "/");
   const q = new URLSearchParams(h), num = (k, d) => { const v = q.get(k); return v === null || v === "" ? d : +v; };
-  const o = {strategy: "site", site_ev: num("ev", 1.1), site_prob: num("prob", 0.1), site_budget: num("budget", 0), site_points: num("points", 0)};
+  const o = {strategy: "site", site_ev: num("ev", 1.1), site_prob: num("prob", 0.1), site_budget: num("budget", 0), site_points: num("points", 0), site_from: (q.get("from") || "").trim()};
+  if (o.site_from && !/^\d{1,2}:\d{2}$/.test(o.site_from)) { say("サイトから来た締切の時刻が読めませんでした", true); return; }
   if (![o.site_ev, o.site_prob, o.site_budget, o.site_points].every(Number.isFinite) || o.site_prob > 1 || o.site_prob < 0 || o.site_budget < 0 || o.site_points < 0) {
     say("サイトから来た設定が読めませんでした", true); return;
   }
