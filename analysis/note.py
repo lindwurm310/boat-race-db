@@ -6,7 +6,7 @@
 出力は predictions/note/YYYYMMDD.md (記事の元)、YYYYMMDD.png (見出し画像) と YYYYMMDD.html (ブラウザで開いて「本文をコピー」→ Note の
 編集画面に貼り付ける用)。Note には公式の投稿 API がないので、公開は人が Note の画面で行う:
   1. HTML を開いて「タイトルをコピー」「本文をコピー」→ Note の新規記事に貼る
-  2. 「（ここから有料エリア）」の位置で「有料エリア設定」のラインを引き、価格 (既定 300円) を確かめて公開
+  2. 「（ここから有料エリア）」の位置で「有料エリア設定」のラインを引き、価格 (既定 100円) を確かめて公開
 GitHub Actions (.github/workflows/yosou-check-today.yml) が毎晩、当日の答え合わせのあとに明日の分を作り、
 GitHub Pages の note/ に置く。
 """
@@ -28,7 +28,7 @@ import seiseki  # noqa: E402
 
 TEMPLATE = os.path.join(HERE, "note", "template.md")
 WEEK = "月火水木金土日"
-PRICE = 300  # 記事の価格 (円)
+PRICE = 100  # 記事の価格 (円)
 HEADER_STYLE = "hot"  # 見出し画像のデザイン (note/design/make_header.py の STYLES)
 TAGS = ["ボートレース", "競艇", "ボートレース予想", "競艇予想", "データ分析"]  # Note のハッシュタグ (5つ)
 # 有料ラインの位置。Note の「有料エリア設定」でこの行のところにラインを引く
