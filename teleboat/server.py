@@ -423,6 +423,16 @@ def make_handler(app):
                     app.log("合言葉を作り直しました (前の URL は使えなくなりました)")
                     self.send(200, {"ok": True, "token": tok},
                               extra={"Set-Cookie": f"tb={tok}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}"})
+                elif u.path == "/api/reset_deposit":
+                    if app.running():
+                        raise ValueError("実行中は消せません。止めてから押してください")
+                    st = store.load_state()
+                    old = st.get("deposit", 0)
+                    st["deposit"] = 0
+                    st.pop("deposit_pending", None)
+                    store.save_state(st)
+                    app.log(f"今日の入金の記録 ({old:,}円) を消しました")
+                    self.send(200, {"ok": True})
                 elif u.path == "/api/reset_today":
                     st = store.load_state()
                     st["auto_ran"] = False

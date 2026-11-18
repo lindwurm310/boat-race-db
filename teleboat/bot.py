@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18c"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-18d"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -386,6 +386,20 @@ class Run:
 
     # ---- 入金 ----
     def deposit_for(self, need, bal, state):
+        # 入金は残高に反映されたのを確かめてから「今日の入金」に記録する。
+        # 指示したがまだ反映されていない分は deposit_pending に置き、二重に入金しないよう上限の計算に含める。
+        pend = state.get("deposit_pending")
+        if pend:
+            if bal >= pend.get("bal_before", 0) + pend["amount"]:
+                state["deposit"] = state.get("deposit", 0) + pend["amount"]
+                self.log(f"前回指示した {pend['amount']:,}円 の入金が残高に反映されていたので記録しました")
+            elif time.time() - pend.get("at", 0) < 3600:
+                self.log(f"前回指示した {pend['amount']:,}円 の入金がまだ反映されていないので、今は入金しません")
+                return
+            else:
+                self.log(f"前回指示した {pend['amount']:,}円 の入金は1時間たっても反映されなかったので、入金できなかったものとして扱います")
+            state.pop("deposit_pending", None)
+            store.save_state(state, self.date)
         room = (self.s["cap"] - state.get("deposit", 0)) // 1000 * 1000
         dep = min(math.ceil((need - bal) / 1000) * 1000, room)
         if dep <= 0:
@@ -400,7 +414,8 @@ class Run:
         self.click("#executeCharge a", "「入金する」")
         self.wait_until(lambda: "入金を実行します" in self.popup_text(), "入金の確認が出ません", 20)
         self.click("#errorPop #ok", "入金確認の OK")
-        state["deposit"] = state.get("deposit", 0) + dep
+        # OK を押した時点ではまだ「指示中」。反映を確かめるまで今日の入金には数えない
+        state["deposit_pending"] = {"amount": dep, "bal_before": bal, "at": time.time()}
         store.save_state(state, self.date)
         res = {}
 
@@ -416,13 +431,18 @@ class Run:
         self.wait_until(done, "入金の結果が出ません", 40)
         self.shot("03_deposit_result")
         if res.get("err"):
+            state.pop("deposit_pending", None)
+            store.save_state(state, self.date)
             raise BotError(f"入金できませんでした: {res['err'][:80]}")
         self.log(f"{dep:,}円 の入金を指示しました")
         self.click("#closeChargecomp a", "入金完了の「閉じる」")
         target = min(need, bal + dep)
         for i in range(60):  # 30秒ごと、最大30分
             if self.balance() >= target:
-                self.log(f"残高に反映されました: {self.balance():,}円")
+                state["deposit"] = state.get("deposit", 0) + dep
+                state.pop("deposit_pending", None)
+                store.save_state(state, self.date)
+                self.log(f"残高に反映されました: {self.balance():,}円 (今日の入金 {state['deposit']:,}円)")
                 return
             if i % 2 == 0:
                 self.log("残高に反映されるのを待っています…")
