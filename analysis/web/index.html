@@ -862,14 +862,15 @@ const PAGES = {
         if (N > 0) n = Math.min(n, N);
         if (B > 0) n = Math.min(n, Math.floor(B / 100));
         pick = all.slice(0, n);
-        unit = B > 0 && n ? Math.max(100, Math.floor(B / n / 100) * 100) : 100;
+        // 1点の金額は「予算 ÷ 点数」で決める (候補が少ない日も1点の金額は上げない。検証と同じ)
+        unit = B > 0 && n ? Math.max(100, Math.floor(B / (N > 0 ? Math.min(N, Math.floor(B / 100)) : n) / 100) * 100) : 100;
         if (!B && !N) msg = "予算か点数を入れると、期待値の高い順に絞り込みます。";
         else if (B > 0 && B < 100) msg = "予算は100円以上にしてください (1点100円から)。";
         else if (N > 0 && all.length < N) msg = `おすすめが ${all.length}点しかないので、${n}点にしています。`;
         else if (N > 0 && n < N) msg = `予算が1点100円で ${n}点分なので、${n}点にしています。`;
         if (B > 0 && n) {
           const rest = B - unit * n;
-          msg += `${msg ? " " : ""}予算 ${money(B)} を ${n}点で分けて、1点 ${money(unit)}${rest > 0 ? ` (余り ${money(rest)})` : ""}。`;
+          msg += `${msg ? " " : ""}予算 ${money(B)}・${N > 0 ? N + "点まで" : n + "点"} → 1点 ${money(unit)} × ${n}点${rest > 0 ? ` (使わない分 ${money(rest)})` : ""}。`;
         }
       }
       const res = c => {
