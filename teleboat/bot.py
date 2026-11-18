@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18e"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-18f"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -61,7 +61,7 @@ def fetch_predictions(date):
 
 STRATEGIES = {
     "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
-    "value": "回収率重視 (期待値1.1以上・1着確率10%以上を期待値の高い順)",
+    "value": "回収率重視 (期待値1.1以上・1着確率10%以上のうち、期待値の上位3点を1点300円)",
     "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
     "roi": "回収率 (期待値) の高い順",
@@ -83,8 +83,9 @@ def picks(rows, settings=None):
     s = settings or {}
     strategy = s.get("strategy", "value")
     if strategy == "value":  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
+        # 過去5年の検証 (analysis/osusume/README.md) で、その日の上位3点×300円が回収率と安定のバランスが一番良かった
         strategy, min_prob, min_ev = "roi", 0.10, 1.1
-        min_odds, per_race = 1.0, int(s.get("per_race", 1) or 1)
+        min_odds, per_race = 0.0, 6
     elif strategy == "site":  # 予想サイトの「おすすめ舟券」と同じ: 全部の艇から、期待値の高い順 (1レースの点数は決めない)
         strategy, min_prob, min_ev = "roi", float(s.get("site_prob", 0.1) or 0), float(s.get("site_ev", 1.1) or 0)
         min_odds, per_race = 0.0, 6
@@ -130,6 +131,9 @@ def picks(rows, settings=None):
     return sorted(out, key=lambda p: p["deadline"])
 
 
+VALUE_BUDGET, VALUE_POINTS = 1000, 3  # 「回収率重視」の1日の予算と点数 (1点300円)
+
+
 def plan(all_picks, settings, state, balance=None, now=None):
     """締切前・まだ買っていない買い目から、上限 (と残高) に収まる分を期待値の高い順に選ぶ"""
     stake, cap = settings["stake"], settings["cap"]
@@ -140,7 +144,9 @@ def plan(all_picks, settings, state, balance=None, now=None):
     by_ev = sorted(open_, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
     room = max(0, cap - state.get("spent", 0))
     note = ""
-    if settings.get("strategy") == "site":
+    if settings.get("strategy") == "value":
+        settings = dict(settings, site_budget=VALUE_BUDGET, site_points=VALUE_POINTS)
+    if settings.get("strategy") in ("site", "value"):
         # サイトと同じ計算: n = min(候補数, 点数, 予算/100)、1点 = 予算/n を100円単位で切り捨て (最低100円)。
         # 今日すでに買った分は予算と点数から差し引く。1日の上限 (cap) は超えない
         budget, points = int(settings.get("site_budget") or 0), int(settings.get("site_points") or 0)
@@ -299,6 +305,11 @@ class Run:
         self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'value'))}")
         state = store.load_state(self.date)
         p = plan(allp, self.s, state)
+        if self.s.get("strategy") == "value":
+            self.s["stake"] = p["stake"]
+            self.log(f"回収率重視: 期待値の上位{VALUE_POINTS}点を1点{p['stake']:,}円 (1日 {VALUE_BUDGET:,}円まで)")
+            if p["note"]:
+                self.log(p["note"])
         if self.s.get("strategy") == "site":
             self.s["stake"] = p["stake"]  # サイトの予算から決まる1点の金額
             self.log(f"サイトの設定: 期待値{self.s['site_ev']}以上・1着確率{round(self.s['site_prob'] * 100)}%以上・"
