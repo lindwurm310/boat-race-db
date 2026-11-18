@@ -99,10 +99,14 @@ def backtest():
 # ---------- 投稿文 ----------
 
 def free_pick(p):
-    """無料予想: 単勝の買い目が1艇だけのレースから、その艇の1着確率が一番高いもの (締切 FREE_FROM 以降)。"""
+    """無料予想: 単勝の買い目が1艇だけのレースから、その艇の1着確率が一番高いもの (締切 FREE_FROM 以降)。
+    note の有料部分 (絞り込み3点) に入っている艇は選ばない。"""
     if "単勝買い目" not in p:
         return None
+    import note
+    paid = {(r["race_id"], str(r["艇"])) for _, r in note.shibori(p).iterrows()}
     b = p[p["単勝買い目"].fillna("").str.strip().str.fullmatch(r"\d")]
+    b = b[[(r["race_id"], str(r["単勝買い目"]).strip()) not in paid for _, r in b.iterrows()]]
     b = b[b["締切"].astype(str) >= FREE_FROM]
     if b.empty:
         return None
@@ -168,8 +172,7 @@ def posts(pred, out, ds, today):
             if fp:
                 text += (f"無料で1点: {fp['venue']}{fp['R']}R（{fp['deadline']}締切）単勝 {fp['lane']}号艇"
                          f"（1着の確率{fp['prob'] * 100:.0f}%・期待値{fp['ev']}）\n\n")
-            text += (f"{'・'.join(m['venues'][:5])}{'ほか' if len(m['venues']) > 5 else ''}の全{m['races']}レース、"
-                     f"単勝の買い目{m['picks']}点はnoteで\n{{note記事のURL}}\n\n"
+            text += (f"全{m['races']}レースの予想は無料。過去5年の検証で回収率124%の単勝3点はnoteで\n{{note記事のURL}}\n\n"
                      + (f"#{fp['venue']} " if fp else "") + f"{TAGS}\n{FOOT}")
             items.append(dict(kind="告知", when="毎日17時 (note の公開後。{note記事のURL} を公開した記事のURLに置き換える)",
                               text=text, free=fp))
