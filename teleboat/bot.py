@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-18c"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -60,6 +60,7 @@ def fetch_predictions(date):
 
 
 STRATEGIES = {
+    "value": "回収率重視 (期待値1.1以上・1着確率10%以上を期待値の高い順)",
     "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
     "roi": "回収率 (期待値) の高い順",
@@ -79,9 +80,13 @@ def picks(rows, settings=None):
     """予想の行から、1点ずつの単勝の買い目を作る。settings の strategy で選び方を変える。
     各買い目: key, race_id, jcd, rno, venue, deadline, boat, prob (1着確率), odds (予想オッズ), ev (期待値), score (並べる値)"""
     s = settings or {}
-    strategy = s.get("strategy", "model")
-    min_prob, min_ev = float(s.get("min_prob", 0) or 0), float(s.get("min_ev", 1.0) or 0)
-    min_odds, per_race = float(s.get("min_odds", 1.0) or 0), int(s.get("per_race", 1) or 1)
+    strategy = s.get("strategy", "value")
+    if strategy == "value":  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
+        strategy, min_prob, min_ev = "roi", 0.10, 1.1
+        min_odds, per_race = 1.0, int(s.get("per_race", 1) or 1)
+    else:
+        min_prob, min_ev = float(s.get("min_prob", 0) or 0), float(s.get("min_ev", 1.0) or 0)
+        min_odds, per_race = float(s.get("min_odds", 1.0) or 0), int(s.get("per_race", 1) or 1)
     out = []
     for r in rows:
         _, jcd, rno = r["race_id"].split("-")
@@ -268,7 +273,7 @@ class Run:
         except Exception as e:
             raise BotError(f"今日 ({self.date}) の予想が読めませんでした: {e}")
         allp = picks(rows, self.s)
-        self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'model'))}")
+        self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'value'))}")
         state = store.load_state(self.date)
         p = plan(allp, self.s, state)
         self.log(f"今日の買い目 {len(allp)}点・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"

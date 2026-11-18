@@ -100,8 +100,9 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
           <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
         <label>買う舟券の選び方（単勝）
           <select id="strategy">
-            <option value="model">予想モデルの買い目（期待値の高い順）</option>
-            <option value="hit">的中率の高い順（各レースの本命）</option>
+            <option value="value">回収率重視（おすすめ）: 期待値1.1以上・1着確率10%以上</option>
+            <option value="model">予想モデルの買い目（期待値1以上）</option>
+            <option value="hit">的中率の高い順（各レースの本命）※回収率は低め</option>
             <option value="roi">回収率（期待値）の高い順</option>
             <option value="long">高配当狙い（予想オッズの高い順）</option>
           </select></label>
@@ -174,7 +175,7 @@ async function refresh() {
   if (!filled) {
     filled = true;
     $("stake").value = st.stake; $("capIn").value = st.cap; $("auto_time").value = st.auto_time; $("mode").value = st.mode;
-    $("strategy").value = st.strategy || "model"; $("per_race").value = st.per_race || 1;
+    $("strategy").value = st.strategy || "value"; $("per_race").value = st.per_race || 1;
     $("min_prob").value = Math.round((st.min_prob || 0) * 100); $("min_ev").value = st.min_ev ?? 1; $("min_odds").value = st.min_odds ?? 1;
     $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;

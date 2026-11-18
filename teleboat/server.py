@@ -154,7 +154,7 @@ class App:
         except Exception as e:
             return {"error": f"今日の予想が読めません: {e}"}
         p = bot.plan(bot.picks(rows, s), s, store.load_state())
-        p["strategy"] = bot.STRATEGIES.get(s.get("strategy", "model"))
+        p["strategy"] = bot.STRATEGIES.get(s.get("strategy", "value"))
         return {k: v for k, v in p.items()}
 
     def fix_1117(self):
@@ -209,10 +209,16 @@ class App:
                     day["pending"] += 1
                 else:
                     win = first == str(t["boat"])
-                    t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
-                    t["payout"] = int((r.get("単勝配当") or 0) * t["stake"] / 100) if win else 0
-                    day["hit"] += win
-                    day["settled"] += t["stake"]
+                    if win and r.get("単勝配当") is None:  # 配当がまだ入っていない
+                        t["result"] = "的中 (配当待ち)"
+                        t["payout"] = 0
+                        day["pending"] += 1
+                        day["hit"] += 1
+                    else:
+                        t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
+                        t["payout"] = int(r["単勝配当"] * t["stake"] / 100) if win else 0
+                        day["hit"] += win
+                        day["settled"] += t["stake"]
                 day["stake"] += t["stake"]
                 day["payout"] += t["payout"]
                 day["n"] += 1

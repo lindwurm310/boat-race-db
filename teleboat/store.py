@@ -37,7 +37,7 @@ DEFAULTS = {
     #   hit   = 的中率の高い順 (各レースの1着確率が一番高い艇)
     #   roi   = 回収率 (期待値 = 1着確率 × 予想オッズ) の高い順。全部の艇から選ぶ
     #   long  = 高配当狙い (予想オッズが高い艇のうち、期待値が条件を満たすもの)
-    "strategy": "model",
+    "strategy": "value",
     "min_prob": 0.0,       # 1着確率がこれ未満の艇は買わない (0〜1)
     "min_ev": 1.0,         # 期待値がこれ未満の艇は買わない (hit 以外)
     "min_odds": 1.0,       # 予想オッズがこれ未満の艇は買わない
@@ -173,8 +173,8 @@ def save_settings(new):
             raise ValueError("1点の金額は100円単位にしてください")
         if d.get("cap", 4000) < d.get("stake", 100):
             raise ValueError("1日の上限は1点の金額以上にしてください")
-        if d.get("strategy") not in ("model", "hit", "roi", "long"):
-            d["strategy"] = "model"
+        if d.get("strategy") not in ("value", "model", "hit", "roi", "long"):
+            d["strategy"] = "value"
         if not 1 <= d.get("per_race", 1) <= 6:
             raise ValueError("1レースの点数は1〜6にしてください")
         if d.get("mode") not in ("test", "live"):
