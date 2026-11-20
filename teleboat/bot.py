@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-20a"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-20b"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -61,7 +61,7 @@ def fetch_predictions(date):
 
 STRATEGIES = {
     "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
-    "value": "回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上のうち、期待値の上位3点を1点300円)",
+    "value": "回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上のうち、期待値の上位3点。1点の金額は設定のとおり)",
     "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
     "roi": "回収率 (期待値) の高い順",
@@ -131,7 +131,7 @@ def picks(rows, settings=None):
     return sorted(out, key=lambda p: p["deadline"])
 
 
-VALUE_BUDGET, VALUE_POINTS, VALUE_FROM = 1000, 3, "11:00"  # 「回収率重視」の1日の予算・点数 (1点300円)・締切の時刻
+VALUE_POINTS, VALUE_FROM = 3, "11:00"  # 「回収率重視」の点数・締切の時刻 (1点の金額は設定の stake)
 
 
 def plan(all_picks, settings, state, balance=None, now=None):
@@ -147,7 +147,7 @@ def plan(all_picks, settings, state, balance=None, now=None):
     room = max(0, cap - state.get("spent", 0))
     note = ""
     if settings.get("strategy") == "value":
-        settings = dict(settings, site_budget=VALUE_BUDGET, site_points=VALUE_POINTS, site_from=VALUE_FROM)
+        settings = dict(settings, site_budget=VALUE_POINTS * stake, site_points=VALUE_POINTS, site_from=VALUE_FROM)  # 1点 = 設定の金額
     if settings.get("strategy") in ("site", "value"):
         # サイトと同じ計算:
         #   点数を決めたとき: 1点 = 予算 ÷ 点数 (100円単位で切り捨て、最低100円)。点数 = min(点数, 予算/100)。
@@ -318,7 +318,7 @@ class Run:
         p = plan(allp, self.s, state)
         if self.s.get("strategy") == "value":
             self.s["stake"] = p["stake"]
-            self.log(f"回収率重視: 締切{VALUE_FROM}以降のレースから期待値の上位{VALUE_POINTS}点を1点{p['stake']:,}円 (1日 {VALUE_BUDGET:,}円まで)")
+            self.log(f"回収率重視: 締切{VALUE_FROM}以降のレースから期待値の上位{VALUE_POINTS}点を1点{p['stake']:,}円 (設定の1点の金額)")
             if p["note"]:
                 self.log(p["note"])
         if self.s.get("strategy") == "site":
