@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-18h"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-20a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -452,10 +452,14 @@ class Run:
                 self.log(f"前回指示した {pend['amount']:,}円 の入金は1時間たっても反映されなかったので、入金できなかったものとして扱います")
             state.pop("deposit_pending", None)
             store.save_state(state, self.date)
-        room = (self.s["cap"] - state.get("deposit", 0)) // 1000 * 1000
+        # 入金は1,000円単位。上限が1,000円単位でないとき (例: 900円) に切り捨てると0円になって入金できないので、
+        # 残りの上限を1,000円単位に切り上げる (購入は別に上限で止めるので、上限を超えて買うことはない)
+        left = self.s["cap"] - state.get("deposit", 0)
+        room = math.ceil(left / 1000) * 1000 if left > 0 else 0
         dep = min(math.ceil((need - bal) / 1000) * 1000, room)
         if dep <= 0:
-            self.log("今日はもう上限まで入金したので入金しません")
+            self.log(f"今日はもう上限まで入金したので入金しません (今日の入金の記録 {state.get('deposit', 0):,}円・1日の上限 {self.s['cap']:,}円。"
+                     "実際には入金されていないときは、パネルの「今日の入金記録を消す」で0円に戻せます)")
             return
         self.step = "入金"
         self.log(f"残高 {bal:,}円 が足りないので {dep:,}円 を入金します")
