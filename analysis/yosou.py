@@ -889,6 +889,8 @@ def main():
     ap.add_argument("--no-train", action="store_true", help="review: 振り返りのあと学習し直さない")
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
     ap.add_argument("--no-open", action="store_true", help="serve: 起動したときにブラウザを開かない")
+    ap.add_argument("--allow-host", action="append", help="serve: 127.0.0.1 のほかに開ける名前 (例: .trycloudflare.com / 自分のドメイン / .ts.net)。何回でも指定できる")
+    ap.add_argument("--password", help="serve: 外 (Cloudflare Tunnel など) から開くときのパスワード。環境変数 YOSOU_PASSWORD でも可")
     ap.add_argument("--years", type=int, default=10, help="backtest: 過去何年分を予想し直すか")
     ap.add_argument("--backtest", action="store_true", help="seiseki: backtest の成績を出す")
     ap.add_argument("--racer-days", type=int, default=365, help="racer: 直近何日の成績か")
