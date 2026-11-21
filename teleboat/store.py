@@ -30,6 +30,7 @@ DEFAULTS = {
     "auto_time": "09:30",
     "mode": "test",        # test = 購入の直前で止める / live = 購入まで行う
     "deposit": True,       # 残高が足りなければ不足分を入金する (本番のときだけ)
+    "auto_update": True,   # GitHub に新しい版が出たら、自動で入れ替えて起動し直す (実行中は待つ)
     "confirm": True,       # 本番で買う前に、買う舟券をパネルに出して「購入する」を押すまで待つ (毎日の自動実行も)
     "headless": True,      # Edge の画面を出さずに動かす
     "port": 8766,

@@ -10,6 +10,7 @@ import ipaddress
 import json
 import os
 import secrets
+import shutil
 import socket
 import sys
 import threading
@@ -23,6 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import bot  # noqa: E402
 import store  # noqa: E402
+import updater  # noqa: E402
 
 WEB = os.path.join(HERE, "web")
 LOG_DIR = os.path.join(store.BASE, "logs")
@@ -44,6 +46,9 @@ class App:
         self.last = {}          # 最後の実行の結果
         self.shot_at = 0
         self.check_cache = {}
+        self.srv = None
+        self.upd = {"checked": "", "remote": "", "msg": "", "busy": False}  # 自動更新の様子 (画面に出す)
+        self.upd_lock = threading.Lock()
         self.fix_1117()
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(store.SHOTS, exist_ok=True)
@@ -186,7 +191,7 @@ class App:
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at,
-            "version": bot.VERSION, "date": store.today(), "now": dt.datetime.now().strftime("%H:%M:%S"),
+            "version": bot.VERSION, "update": dict(self.upd, branch=updater.branch()), "date": store.today(), "now": dt.datetime.now().strftime("%H:%M:%S"),
         }
 
     def plan(self):
@@ -269,6 +274,68 @@ class App:
                 tot[k] += day[k]
             out.append(day)
         return {"days": out, "total": tot}
+
+    # ---- 自動更新 ----
+    def update_loop(self):
+        """起動して1分後と、そのあと30分ごとに GitHub の版を確かめる"""
+        time.sleep(60)
+        while True:
+            try:
+                if store.load_settings().get("auto_update", True):
+                    self.check_update()
+            except Exception as e:
+                self.log(f"自動更新の確認でエラー: {e}")
+            time.sleep(1800)
+
+    def check_update(self, manual=False):
+        """新しい版があれば入れ替えて起動し直す。戻り値は画面に出す文"""
+        if not self.upd_lock.acquire(blocking=False):
+            return "いま更新を確かめています"
+        try:
+            self.upd["busy"] = True
+            br = updater.branch()
+            remote = updater.remote_version(br)
+            self.upd.update(checked=dt.datetime.now().strftime("%m/%d %H:%M"), remote=remote)
+            if remote == bot.VERSION:
+                self.upd["msg"] = "最新です"
+                if manual:
+                    self.log(f"更新を確かめました: 最新です (版 {bot.VERSION})")
+                return f"最新です (版 {bot.VERSION})"
+            if self.running():
+                self.upd["msg"] = f"新しい版 {remote} があります。実行が終わったら入れ替えます"
+                return self.upd["msg"]
+            self.log(f"新しい版 {remote} があるので入れ替えます (今の版 {bot.VERSION}・{br})")
+            tmp, src, inst = updater.download(br)
+            try:
+                got = updater.check_loads(src)
+                if self.running():  # 取っている間に実行が始まったら、次の確認まで待つ
+                    self.upd["msg"] = f"新しい版 {got} があります。実行が終わったら入れ替えます"
+                    return self.upd["msg"]
+                updater.install(src, inst)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            self.log(f"版 {got} に入れ替えました。操作画面を起動し直します (数秒で戻ります)")
+            self.upd["msg"] = f"版 {got} に入れ替えました。起動し直しています"
+            threading.Thread(target=self._restart, daemon=True).start()
+            return self.upd["msg"]
+        except Exception as e:
+            self.upd["msg"] = f"更新できませんでした: {e}"
+            self.log(self.upd["msg"])
+            return self.upd["msg"]
+        finally:
+            self.upd["busy"] = False
+            self.upd_lock.release()
+
+    def _restart(self):
+        time.sleep(1)  # 画面への返事を先に送る
+        try:
+            if self.srv:
+                self.srv.shutdown()
+                self.srv.server_close()
+            updater.restart()
+        except Exception as e:
+            self.log(f"起動し直せませんでした: {e}")
+        os._exit(0)
 
     def scheduler(self):
         """毎日 auto_time に1回だけ実行する (パソコンが起きていれば、時刻を過ぎてから起きても 2 時間以内なら実行)"""
@@ -460,6 +527,8 @@ def make_handler(app):
                     else:
                         ok, msg = app.start(body.get("mode"))
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
+                elif u.path == "/api/check_update":
+                    self.send(200, {"ok": True, "message": app.check_update(manual=True)})
                 elif u.path == "/api/approve":
                     ok, msg = app.approve(str(body.get("id") or ""))
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
@@ -616,13 +685,22 @@ def main():
     port = s["port"]
     class Server(ThreadingHTTPServer):
         allow_reuse_address = False
-    try:
-        srv = Server(("0.0.0.0", port), make_handler(app))
-    except OSError as e:
-        app.log(f"操作画面を起動できませんでした (8766 番がほかで使われています): {e}")
-        raise
+    # 自動更新で起動し直したときは、前の画面が 8766 番を空けるまで少し待つ
+    for i in range(90):
+        try:
+            srv = Server(("0.0.0.0", port), make_handler(app))
+            break
+        except OSError as e:
+            if i == 89:
+                app.log(f"操作画面を起動できませんでした (8766 番がほかで使われています): {e}")
+                raise
+            time.sleep(1)
+    app.srv = srv
+    if os.environ.pop("TELEBOAT_RESTARTED", None):
+        app.log(f"自動更新のあと起動し直しました (版 {bot.VERSION})")
     write_urls(app, first=True)
     threading.Thread(target=app.scheduler, daemon=True).start()
+    threading.Thread(target=app.update_loop, daemon=True).start()
     srv.serve_forever()
 
 

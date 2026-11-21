@@ -125,6 +125,7 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
         <label>予想オッズがこれ以上<input id="min_odds" type="number" min="1" step="0.5" inputmode="decimal"></label>
         <label class="chk"><input id="autoIn" type="checkbox"> 毎日自動で実行する</label>
         <label class="chk"><input id="deposit_on" type="checkbox"> 残高が足りなければ不足分を入金する（本番のみ）</label>
+        <label class="chk"><input id="auto_update" type="checkbox"> 新しい版が出たら自動で更新する（実行中は終わってから）</label>
         <label class="chk"><input id="confirm_on" type="checkbox"> 本番で買う前に、買う舟券を出して確認する（毎日の自動実行も）</label>
         <label class="chk"><input id="headless" type="checkbox"> Edge の画面を出さずに動かす</label>
       </div>
@@ -142,11 +143,13 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
       <div class="row" style="margin-top:12px">
         <button class="primary" id="save">保存</button>
         <button id="clearSecrets">ログイン情報を消す</button>
+        <button id="checkUpd">今すぐ更新を確かめる</button>
         <button id="resetAuto">今日の自動実行をもう一度できるようにする</button>
         <button id="resetDep">今日の入金の記録を消す</button>
         <button id="newToken">合言葉を作り直す</button>
       </div>
       <div class="msg" id="setMsg"></div>
+      <div class="msg" id="updMsg"></div>
     </details>
   </section>
 </main>
@@ -167,8 +170,10 @@ function say(t, err) { $("msg").textContent = t; $("msg").className = "msg" + (e
 
 async function refresh() {
   let s;
-  try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません"; return; }
+  try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません（起動し直しているときは数秒で戻ります）"; setTimeout(refresh, 5000); return; }
   $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
+  const up = s.update || {};
+  $("updMsg").textContent = `自動更新: 今の版 ${s.version}` + (up.checked ? `・${up.checked} に確認 (GitHub の版 ${up.remote})${up.msg ? "・" + up.msg : ""}` : "・まだ確かめていません");
   $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
   $("modeBadge").textContent = s.running ? (s.last.mode === "live" ? "本番" : "テスト") : "";
   $("modeBadge").className = "badge " + (s.running ? (s.last.mode === "live" ? "live" : "test") : "");
@@ -194,7 +199,7 @@ async function refresh() {
     $("strategy").value = st.strategy || "value"; $("per_race").value = st.per_race || 1;
     $("siteSum").textContent = siteText(st);
     $("min_prob").value = Math.round((st.min_prob || 0) * 100); $("min_ev").value = st.min_ev ?? 1; $("min_odds").value = st.min_odds ?? 1;
-    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("headless").checked = st.headless;
+    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("auto_update").checked = st.auto_update !== false; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
   }
   showApproval(s.running ? null : s.today.approval);
@@ -280,7 +285,7 @@ $("save").onclick = async () => {
   const body = {stake: +$("stake").value, cap: +$("capIn").value, auto_time: $("auto_time").value, mode: $("mode").value,
     strategy: $("strategy").value, per_race: +$("per_race").value || 1, min_prob: (+$("min_prob").value || 0) / 100,
     min_ev: +$("min_ev").value || 0, min_odds: +$("min_odds").value || 1,
-    auto: $("autoIn").checked, deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, headless: $("headless").checked};
+    auto: $("autoIn").checked, deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, auto_update: $("auto_update").checked, headless: $("headless").checked};
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
   if ($("panel_password").value) body.panel_password = $("panel_password").value;
   try {
@@ -297,6 +302,11 @@ $("resetDep").onclick = async () => {
   if (!confirm("今日の入金の記録を0円に戻します。テレボートの残高は変わりません。実際に入金した分まで消すと、上限を超えて入金することがあります。よろしいですか？")) return;
   try { await api("/api/reset_deposit", {}); $("setMsg").textContent = "今日の入金の記録を消しました"; }
   catch (e) { $("setMsg").textContent = "消せませんでした: " + e.message; }
+};
+$("checkUpd").onclick = async () => {
+  $("setMsg").textContent = "確かめています…";
+  try { const r = await api("/api/check_update", {}); $("setMsg").textContent = r.message; } catch (e) { $("setMsg").textContent = "確かめられませんでした: " + e.message; }
+  setTimeout(refresh, 3000);
 };
 $("resetAuto").onclick = async () => { await api("/api/reset_today", {}); $("setMsg").textContent = "今日の自動実行をもう一度できるようにしました"; };
 $("newToken").onclick = async () => {
