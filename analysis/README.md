@@ -226,10 +226,13 @@ LightGBM で各艇の1着確率を出し、2・3着は Harville 型（1着を除
 
 パソコンのサーバーを Cloudflare Tunnel でインターネットから開けるようにする。ルーターの設定（ポート開放）はいらない。**インターネット全体に出るので、パスワードを必ず決める**（決めていないと、外からのアクセスは断る）。
 
-- お試し（無料・アカウント不要。起動のたびに URL が変わる）
+- 無料（trycloudflare.com、アカウント不要）: **`yosou tunnel` を使う**
   1. `winget install Cloudflare.cloudflared`
-  2. サーバーを `yosou serve --allow-host .trycloudflare.com --password <パスワード>` で起動（`set YOSOU_PASSWORD=<パスワード>` でも可）
-  3. `cloudflared tunnel --url http://127.0.0.1:8765` を実行し、表示された `https://〜.trycloudflare.com` をスマホで開く。ユーザー名は何でもよく、パスワードを入れる
+  2. 最初の1回だけ `yosou tunnel --setup`。パスワードを作って `remote.json`（インストール先）に保存し、URL を送る Gmail を聞く。Gmail は Google の「アプリ パスワード」（https://myaccount.google.com/apppasswords 、2段階認証をオンにすると作れる16文字）を入れる。テストのメールが届けば OK
+  3. `yosou tunnel`（インストール先の `tunnel.bat`）で、パスワード付きのサーバーと cloudflared を起動する。URL（`https://〜.trycloudflare.com`）が決まるたびに、デスクトップの `予想サイトのURL.txt` に書き、Gmail で自分に送る。cloudflared やサーバーが落ちたら起動し直す。スタートアップに入れておけば、PC を起動し直しても新しい URL がメールで届く
+  4. スマホでメールの URL を開き、ユーザー名は何でも、パスワードは `remote.json` の `password` を入れる（ブラウザが覚える）
+  - URL は起動し直すたびに変わる。メールにパスワードは書かない
+  - 毎朝の自動処理（取り込み・答え合わせ・予想）は PC の中で動くので、外からつないでいなくても続く。外から「学習・データ」のボタンも使える
 - 自分のドメイン（URL が固定。おすすめ）: ドメインを Cloudflare に入れ、Zero Trust の「Networks → Tunnels」でトンネルを作り、公開ホスト名（例: `yosou.example.com`）→ `http://127.0.0.1:8765` を登録。Zero Trust の「Access → Applications」で同じホスト名に自分のメールアドレスだけを許可すると、パスワードの前にメールのコードでのログインも付く。サーバーは `--allow-host yosou.example.com --password <パスワード>` で起動する
 
 ### スマホ・iPad から、家の外でもパソコンのサーバーを使う（Tailscale）

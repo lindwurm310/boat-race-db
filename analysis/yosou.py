@@ -12,6 +12,7 @@
   python analysis/yosou.py review                先週の予想と結果を比べて振り返り → 学習し直す (毎週月曜は daily が自動で振り返る)
   python analysis/yosou.py seiseki              これまでの予想の成績 (的中率・回収率) を全期間・直近30日・直近7日・日ごとに集計し、良い悪いを備考に書く
   python analysis/yosou.py backtest --years 10   過去10年を1年ずつ、その前のデータだけで学習して予想し直し、成績と備考を出す
+  python analysis/yosou.py tunnel                Cloudflare の無料トンネルで外から使う (パスワード付き、URL を Gmail で送る。最初に --setup)
   python analysis/yosou.py serve                 Chrome の操作画面 (http://127.0.0.1:8765/) と拡張機能用のサーバー。全部の機能を Chrome から使える
 
   毎日の流れ: predict (朝) → check (夜) → 週に1回くらい update → train で学習し直す (フィードバック)
@@ -567,6 +568,13 @@ def append_log(logs):
     return path
 
 
+# ---------------- tunnel: Cloudflare の無料トンネルで外から使う ----------------
+def cmd_tunnel(a):
+    """サーバー (パスワード付き) と cloudflared を起動し、URL が変わるたびに Gmail で送る (analysis/tunnel.py)。"""
+    import tunnel
+    tunnel.main(a)
+
+
 # ---------------- serve: Chrome から全部の機能を使うためのサーバー ----------------
 def cmd_serve(a):
     """http://127.0.0.1:PORT/ の操作画面と、拡張機能が boatrace.jp のページに出す予想 (analysis/server.py)。"""
@@ -873,7 +881,7 @@ def cmd_racer(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "week", "review", "seiseki",
+    ap.add_argument("command", choices=["setup", "update", "train", "predict", "live", "check", "daily", "racer", "serve", "tunnel", "week", "review", "seiseki",
                                                "backtest"])
     ap.add_argument("--db", default=os.path.join(ROOT, "boatrace.sqlite"))
     ap.add_argument("--raw", default=os.path.join(ROOT, "raw"))
@@ -890,6 +898,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765, help="serve: ポート番号")
     ap.add_argument("--no-open", action="store_true", help="serve: 起動したときにブラウザを開かない")
     ap.add_argument("--allow-host", action="append", help="serve: 127.0.0.1 のほかに開ける名前 (例: .trycloudflare.com / 自分のドメイン / .ts.net)。何回でも指定できる")
+    ap.add_argument("--setup", action="store_true", help="tunnel: パスワードと URL を送る Gmail を設定する")
     ap.add_argument("--password", help="serve: 外 (Cloudflare Tunnel など) から開くときのパスワード。環境変数 YOSOU_PASSWORD でも可")
     ap.add_argument("--years", type=int, default=10, help="backtest: 過去何年分を予想し直すか")
     ap.add_argument("--backtest", action="store_true", help="seiseki: backtest の成績を出す")
@@ -898,7 +907,7 @@ def main():
     if a.date in ("today", "yesterday", "tomorrow"):
         a.date = (dt.date.today() + dt.timedelta(days={"today": 0, "yesterday": -1, "tomorrow": 1}[a.date])).isoformat()
     {"setup": cmd_setup, "update": cmd_update, "train": cmd_train, "predict": cmd_predict, "live": cmd_live,
-     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "week": cmd_week, "review": cmd_review,
+     "check": cmd_check, "daily": cmd_daily, "racer": cmd_racer, "serve": cmd_serve, "tunnel": cmd_tunnel, "week": cmd_week, "review": cmd_review,
      "seiseki": cmd_seiseki, "backtest": cmd_backtest}[a.command](a)
 
 

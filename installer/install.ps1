@@ -125,6 +125,15 @@ call "%~dp0yosou.bat" serve %*
 pause
 "@
 Set-Content -Path (Join-Path $Dest "server.bat") -Value $server -Encoding ASCII -ErrorAction Stop
+# 外 (スマホ) から使うとき: Cloudflare の無料トンネル + パスワード。URL は Gmail で届く (最初に tunnel.bat --setup)
+$tunnel = @"
+@echo off
+title BoatRaceYosou tunnel
+cd /d "%~dp0"
+call "%~dp0yosou.bat" tunnel %*
+pause
+"@
+Set-Content -Path (Join-Path $Dest "tunnel.bat") -Value $tunnel -Encoding ASCII -ErrorAction Stop
 $desk = [Environment]::GetFolderPath("Desktop")
 Get-ChildItem $desk -Filter "ボートレース *.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force  # 前のバージョンのショートカット
 $deskBat = Join-Path $desk "ボートレース予想サーバー.bat"
