@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-20b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-21a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -194,9 +194,11 @@ def digits(s):
 
 # ---------------- 実行 ----------------
 class Run:
-    def __init__(self, settings, log, shot, stop_event, mode=None):
+    def __init__(self, settings, log, shot, stop_event, mode=None, only=None, stake=None):
         self.s = settings
         self.mode = mode or settings["mode"]
+        self.only = set(only) if only is not None else None  # パネルで確かめた買い目のキー。これ以外は買わない
+        self.only_stake = stake                               # 確かめたときの1点の金額。違ったら止める
         self.log = log            # log(str)
         self.shot_cb = shot       # shot(page, name)
         self.stop = stop_event
@@ -313,6 +315,10 @@ class Run:
         except Exception as e:
             raise BotError(f"今日 ({self.date}) の予想が読めませんでした: {e}")
         allp = picks(rows, self.s)
+        if self.only is not None:
+            gone = len(self.only - {x["key"] for x in allp})
+            allp = [x for x in allp if x["key"] in self.only]
+            self.log(f"確認した買い目 {len(self.only)}点だけを買います" + (f" (予想から消えた {gone}点は買いません)" if gone else ""))
         self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'value'))}")
         state = store.load_state(self.date)
         p = plan(allp, self.s, state)
@@ -328,6 +334,8 @@ class Run:
                      f"点数 {self.s['site_points'] or '決めない'}・締切 {self.s.get('site_from') or '決めない'}{'以降' if self.s.get('site_from') else ''} → 1点{p['stake']:,}円")
             if p["note"]:
                 self.log(p["note"])
+        if self.only_stake is not None and self.only_stake != self.s["stake"]:
+            raise BotError(f"1点の金額が確認したとき ({self.only_stake:,}円) と今 ({self.s['stake']:,}円) で違うので止めます。もう一度確認してください")
         self.log(f"今日の買い目 {len(allp)}点・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
                  f"買った {len(p['bought'])}点 ({state.get('spent', 0):,}円)")
         if not p["want"]:

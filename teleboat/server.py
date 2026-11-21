@@ -9,6 +9,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import secrets
 import socket
 import sys
 import threading
@@ -97,20 +98,61 @@ class App:
     def running(self):
         return bool(self.thread and self.thread.is_alive())
 
-    def start(self, mode, why="手動"):
+    def start(self, mode, why="手動", only=None, stake=None):
         if self.running():
             return False, "すでに実行中です"
         s = store.load_settings()
         if mode not in ("test", "live"):
             mode = s["mode"]
         self.stop.clear()
-        self.thread = threading.Thread(target=self._work, args=(s, mode, why), daemon=True)
+        self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, stake), daemon=True)
         self.thread.start()
         return True, "開始しました"
 
-    def _work(self, s, mode, why):
+    # ---- 購入前の確認 ----
+    # 本番で買う前に、今の設定で買う舟券を state["approval"] に置いてパネルに出す。
+    # 「購入する」を押すと、その買い目だけ (同じ1点の金額で) 本番で買う。日が変わると消える
+    def prepare(self, why="手動"):
+        if self.running():
+            return False, "すでに実行中です"
+        p = self.plan()
+        if p.get("error"):
+            return False, p["error"]
+        rows = sorted(p["want"], key=lambda x: -x.get("score", x["ev"]))
+        if not rows:
+            return False, "今買える買い目がありません"
+        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev")
+        ap = {"id": secrets.token_hex(6), "why": why, "at": dt.datetime.now().strftime("%H:%M"),
+              "stake": p["stake"], "total": p["stake"] * len(rows), "strategy": p.get("strategy", ""),
+              "note": p.get("note", ""), "rows": [{k: x.get(k) for k in keep} for x in rows]}
+        st = store.load_state()
+        st["approval"] = ap
+        store.save_state(st)
+        self.log(f"購入前の確認 ({why}): " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']}" for x in rows) +
+                 f" ・1点{ap['stake']:,}円・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います")
+        return True, "買う舟券を出しました。確かめて「購入する」を押してください"
+
+    def approve(self, aid):
+        st = store.load_state()
+        ap = st.get("approval")
+        if not ap or ap.get("id") != aid:
+            return False, "確認の内容が古くなっています。もう一度「本番実行」を押してください"
+        if self.running():
+            return False, "すでに実行中です"
+        st.pop("approval", None)
+        store.save_state(st)
+        return self.start("live", f"{ap['why']}・確認して購入", [x["key"] for x in ap["rows"]], ap["stake"])
+
+    def reject(self):
+        st = store.load_state()
+        if st.pop("approval", None):
+            store.save_state(st)
+            self.log("購入前の確認で「やめる」を押したので買いません")
+        return True, "やめました"
+
+    def _work(self, s, mode, why, only=None, stake=None):
         from playwright.sync_api import sync_playwright
-        r = bot.Run(s, self.log, self.shot, self.stop, mode)
+        r = bot.Run(s, self.log, self.shot, self.stop, mode, only, stake)
         self.current = r
         t0 = time.time()
         self.last = {"start": dt.datetime.now().isoformat(timespec="seconds"), "mode": mode, "why": why, "result": "実行中"}
@@ -241,7 +283,10 @@ class App:
                     if at <= now < at + dt.timedelta(hours=2) and not st.get("auto_ran") and not self.running():
                         st["auto_ran"] = True
                         store.save_state(st)
-                        self.start(s["mode"], "毎日の自動実行")
+                        if s["mode"] == "live" and s.get("confirm", True):
+                            self.prepare("毎日の自動実行")  # 本番は買い目を出して「購入する」を待つ
+                        else:
+                            self.start(s["mode"], "毎日の自動実行")
             except Exception as e:
                 self.log(f"自動実行の確認でエラー: {e}")
             time.sleep(20)
@@ -409,8 +454,18 @@ def make_handler(app):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if u.path == "/api/run":
-                    ok, msg = app.start(body.get("mode"))
+                    s = store.load_settings()
+                    if body.get("mode") == "live" and s.get("confirm", True):
+                        ok, msg = app.prepare("手動")  # 本番はまず買い目を出して確かめてもらう
+                    else:
+                        ok, msg = app.start(body.get("mode"))
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
+                elif u.path == "/api/approve":
+                    ok, msg = app.approve(str(body.get("id") or ""))
+                    self.send(200 if ok else 409, {"ok": ok, "message": msg})
+                elif u.path == "/api/reject":
+                    ok, msg = app.reject()
+                    self.send(200, {"ok": ok, "message": msg})
                 elif u.path == "/api/stop":
                     app.stop.set()
                     self.send(200, {"ok": True})

@@ -67,6 +67,17 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
     </div>
   </section>
 
+  <section class="card" id="apBox" hidden style="border:2px solid var(--ng)">
+    <h2 style="color:var(--ng)">購入前の確認</h2>
+    <div class="msg" id="apNote"></div>
+    <div id="apRows"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="live" id="apOk">この舟券を購入する</button>
+      <button id="apNo">やめる</button>
+    </div>
+    <p class="msg" style="font-size:13px">「購入する」を押すまでは入金も購入もしません。押したときに締切まで3分を切った舟券は買いません。表にない舟券は買いません。</p>
+  </section>
+
   <section class="card">
     <h2>今日の買い目 <button id="reloadPlan" style="min-height:36px;padding:6px 12px;margin-left:8px">読み直す</button></h2>
     <div id="plan" class="msg">-</div>
@@ -114,6 +125,7 @@ details summary { cursor:pointer; font-weight:600; color:var(--mut); }
         <label>予想オッズがこれ以上<input id="min_odds" type="number" min="1" step="0.5" inputmode="decimal"></label>
         <label class="chk"><input id="autoIn" type="checkbox"> 毎日自動で実行する</label>
         <label class="chk"><input id="deposit_on" type="checkbox"> 残高が足りなければ不足分を入金する（本番のみ）</label>
+        <label class="chk"><input id="confirm_on" type="checkbox"> 本番で買う前に、買う舟券を出して確認する（毎日の自動実行も）</label>
         <label class="chk"><input id="headless" type="checkbox"> Edge の画面を出さずに動かす</label>
       </div>
       <p class="msg">ログイン情報はこのパソコンの中にだけ暗号化して保存します。空のままの欄は今の値を使います。</p>
@@ -163,6 +175,7 @@ async function refresh() {
   $("runTest").disabled = $("runLive").disabled = s.running;
   $("stop").disabled = !s.running;
   const st = s.settings;
+  confirmOn = st.confirm !== false;
   $("spent").textContent = yen(s.today.spent);
   $("deposit").textContent = yen(s.today.deposit);
   $("cap").textContent = yen(st.cap);
@@ -181,9 +194,10 @@ async function refresh() {
     $("strategy").value = st.strategy || "value"; $("per_race").value = st.per_race || 1;
     $("siteSum").textContent = siteText(st);
     $("min_prob").value = Math.round((st.min_prob || 0) * 100); $("min_ev").value = st.min_ev ?? 1; $("min_odds").value = st.min_odds ?? 1;
-    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("headless").checked = st.headless;
+    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
   }
+  showApproval(s.running ? null : s.today.approval);
   setTimeout(refresh, s.running ? 2000 : 6000);
 }
 
@@ -206,11 +220,35 @@ async function loadPlan() {
   } catch (e) { $("plan").textContent = "読めませんでした: " + e.message; }
 }
 
+let confirmOn = true;
 async function run(mode) {
-  if (mode === "live" && !confirm("本番で実行します。足りなければ入金し、購入まで行います（1日の上限まで）。よろしいですか？")) return;
+  if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、購入まで行います（1日の上限まで）。よろしいですか？")) return;
   try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
   setTimeout(refresh, 500);
 }
+let apId = null;
+function showApproval(ap) {
+  $("apBox").hidden = !ap;
+  if (!ap) { apId = null; return; }
+  if (ap.id === apId) return;
+  apId = ap.id;
+  $("apNote").textContent = `${ap.at} ${ap.why}: ${ap.strategy || ""}・1点${ap.stake.toLocaleString()}円・${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円` + (ap.note ? `（${ap.note}）` : "");
+  const pct = (v) => v == null ? "-" : Math.round(v * 100) + "%";
+  const t = document.createElement("table");
+  t.innerHTML = "<tr><th>締切</th><th>場</th><th>R</th><th>単勝</th><th>金額</th><th>的中率</th><th>予想オッズ</th><th>期待値</th></tr>" +
+    ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${x.venue}</td><td>${x.rno}R</td><td>${x.boat}</td><td>${yen(ap.stake)}</td><td>${pct(x.prob)}</td><td>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td>${x.ev == null ? "-" : (+x.ev).toFixed(2)}</td></tr>`).join("");
+  $("apRows").replaceChildren(t);
+  $("apBox").scrollIntoView({behavior: "smooth", block: "start"});
+}
+$("apOk").onclick = async () => {
+  if (!apId) return;
+  try { const r = await api("/api/approve", {id: apId}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
+  setTimeout(refresh, 500);
+};
+$("apNo").onclick = async () => {
+  try { const r = await api("/api/reject", {}); say(r.message); } catch (e) { say(e.message, true); }
+  setTimeout(refresh, 500);
+};
 $("runTest").onclick = () => run("test");
 $("runLive").onclick = () => run("live");
 $("stop").onclick = async () => { await api("/api/stop", {}); say("停止を指示しました"); };
@@ -242,7 +280,7 @@ $("save").onclick = async () => {
   const body = {stake: +$("stake").value, cap: +$("capIn").value, auto_time: $("auto_time").value, mode: $("mode").value,
     strategy: $("strategy").value, per_race: +$("per_race").value || 1, min_prob: (+$("min_prob").value || 0) / 100,
     min_ev: +$("min_ev").value || 0, min_odds: +$("min_odds").value || 1,
-    auto: $("autoIn").checked, deposit: $("deposit_on").checked, headless: $("headless").checked};
+    auto: $("autoIn").checked, deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, headless: $("headless").checked};
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
   if ($("panel_password").value) body.panel_password = $("panel_password").value;
   try {
