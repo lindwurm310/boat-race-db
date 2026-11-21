@@ -158,8 +158,9 @@ const addDays = (d, n) => { const [y, m, dd] = d.split("-").map(Number); return 
 const pct = v => v == null || v === "" || isNaN(v) ? "" : (v * 100).toFixed(1) + "%";
 const pct0 = v => v == null || v === "" || isNaN(v) ? "" : Math.round(v * 100) + "%";
 
-// サーバー (127.0.0.1) が無いところ (GitHub Pages・iPad) では、毎朝書き出された data/*.json を読むだけ
-const STATIC = !["127.0.0.1", "localhost"].includes(location.hostname);
+// サーバーが無いところ (GitHub Pages) では、毎朝書き出された data/*.json を読むだけ。
+// パソコンのサーバーから開いたときは、サーバーが <meta name="yosou-server"> を入れる (Tailscale でスマホから開いたときも)
+const STATIC = !document.querySelector('meta[name="yosou-server"]');
 if (STATIC) document.documentElement.classList.add("static");
 const hint = t => STATIC ? "。毎朝 (前の日の成績ファイルが出しだい) 更新されます" : t;
 let racersCache = null;

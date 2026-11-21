@@ -222,6 +222,21 @@ LightGBM で各艇の1着確率を出し、2・3着は Harville 型（1着を除
 
 **GPU**: 学習は LightGBM の GPU 版（OpenCL）を使う。NVIDIA・AMD・Intel のグラフィックドライバーが入っていれば自動で GPU、使えなければ CPU の全コアで学習する（`set YOSOU_DEVICE=cpu` で CPU に固定）。特徴量づくり（過去成績の集計）は CPU。
 
+### スマホ・iPad から、家の外でもパソコンのサーバーを使う（Tailscale）
+
+パソコンのサーバー（予想する・答え合わせ・学習などのボタンも全部）を、スマホや iPad から家の外でも使えるようにする。インターネットに公開はせず、**自分の Tailscale アカウントでログインした端末だけ**が開ける（無料の個人プラン）。
+
+1. パソコンに Tailscale を入れてログインする（`winget install Tailscale.Tailscale`、または https://tailscale.com/download ）。スマホ・iPad にも Tailscale アプリを入れて**同じアカウント**でログインする
+2. Tailscale の管理画面（https://login.tailscale.com/admin/dns ）で MagicDNS と HTTPS Certificates を有効にする
+3. パソコンで1回だけ `tailscale serve --bg 8765` を実行する（パソコンの 127.0.0.1:8765 を、自分の端末にだけ https で見せる。再起動しても残る）
+4. サーバーを `yosou serve --allow-host .ts.net` で起動する（`server.bat --allow-host .ts.net` でも同じ。スタートアップのショートカットは引数を `--no-open --allow-host .ts.net` にする）
+5. スマホで `https://<パソコンの名前>.<tailnet名>.ts.net/` を開く（`tailscale serve status` で表示される URL）。ホーム画面に追加しておくと便利
+
+- サーバーは今までどおり 127.0.0.1 でだけ待ち受ける。`--allow-host` は Tailscale の名前で来たアクセスを通すだけで、家の Wi-Fi のほかの機械やインターネットからは開けない
+- パソコンがスリープ・電源オフのときやサーバーを閉じたときは開けない（そのときは GitHub Pages の「iPad で見る」を使う）
+- やめるときは `tailscale serve --https=443 off`
+- 「tailscale funnel」はインターネット全体に公開してしまうので使わない
+
 ### iPad で見る（サーバーなし）
 
 GitHub Actions（`.github/workflows/yosou-page.yml`）が、前の日の成績ファイルが公式サイトに出しだい（深夜1:00〜9:00 に毎時見に行く）、成績の取り込み → 昨日の答え合わせ → 月曜は先週の振り返り → 昨日までのデータでモデルを学習し直す → 今日と明日の予想をして、GitHub Pages に置く。モデルは毎日学習し直すので、いつも昨日までのデータで予想する。iPad の Safari で https://lindwurm310.github.io/boat-race-db/ を開けば、操作画面と同じ表（今日の予想・1週間・答え合わせ・振り返り・選手の成績）が見られる。

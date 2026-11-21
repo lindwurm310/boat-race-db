@@ -6,6 +6,9 @@
 
 自分のパソコンの中 (127.0.0.1) からしか繋がらない。ほかのサイトから勝手に操作されないように、
 Host ヘッダーを確かめ、処理を動かす POST には X-Yosou ヘッダーを必須にしている。
+
+スマホ・iPad から (家の外でも) 使うときは Tailscale の「tailscale serve」でこのサーバーを自分の端末だけに見せ、
+--allow-host .ts.net で Tailscale の名前 (〜.ts.net) を通す (analysis/README.md の「スマホ・外から使う」)。
 """
 import argparse
 import contextlib
@@ -258,6 +261,8 @@ class App:
 
 def make_handler(app):
     port = app.a.port
+    # 127.0.0.1 のほかに通す Host。"." で始まるものはその後ろが同じ名前を全部 (例: .ts.net)
+    extra = [h.strip().lower() for h in (getattr(app.a, "allow_host", None) or []) if h.strip()]
 
     class Handler(BaseHTTPRequestHandler):
         def send(self, code, body, ctype="application/json; charset=utf-8"):
@@ -269,7 +274,11 @@ def make_handler(app):
             self.wfile.write(data)
 
         def host_ok(self):
-            return self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}")
+            host = self.headers.get("Host", "").lower()
+            if host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return True
+            name = host.rsplit(":", 1)[0]
+            return any(name.endswith(h) if h.startswith(".") else name == h for h in extra)
 
         def do_GET(self):
             if not self.host_ok():
@@ -280,7 +289,10 @@ def make_handler(app):
             try:
                 if u.path in ("/", "/index.html"):
                     with open(os.path.join(WEB, "index.html"), "rb") as f:
-                        return self.send(200, f.read(), "text/html; charset=utf-8")
+                        html = f.read()
+                    # サーバーから開いたしるし (GitHub Pages の同じページと見分ける)
+                    html = html.replace(b"<head>", b'<head><meta name="yosou-server" content="1">', 1)
+                    return self.send(200, html, "text/html; charset=utf-8")
                 routes = {
                     "/health": lambda: (200, {"ok": True}),
                     "/recommend": lambda: app.recommend(q),
@@ -347,6 +359,8 @@ def run(a, y):
     url = f"http://127.0.0.1:{a.port}/"
     print(f"ボートレース予想のサーバーを起動しました: {url}")
     print("Chrome の操作画面から、予想・答え合わせ・振り返り・学習などができます。この画面を閉じるとサーバーが止まります。")
+    if getattr(a, "allow_host", None):
+        print("この名前からも開けます (Tailscale など):", ", ".join(a.allow_host))
     if not a.no_open:
         threading.Timer(1.0, open_browser, args=(url,)).start()
     try:
