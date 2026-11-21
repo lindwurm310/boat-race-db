@@ -7,9 +7,13 @@
 自分のパソコンの中 (127.0.0.1) からしか繋がらない。ほかのサイトから勝手に操作されないように、
 Host ヘッダーを確かめ、処理を動かす POST には X-Yosou ヘッダーを必須にしている。
 
-スマホ・iPad から (家の外でも) 使うときは Tailscale の「tailscale serve」でこのサーバーを自分の端末だけに見せ、
---allow-host .ts.net で Tailscale の名前 (〜.ts.net) を通す (analysis/README.md の「スマホ・外から使う」)。
+スマホ・iPad から (家の外でも) 使うときは、Cloudflare Tunnel か Tailscale でこのサーバーへ中継し、
+--allow-host でその名前 (例: .trycloudflare.com / .ts.net) を通す (analysis/README.md の「スマホ・外から使う」)。
+外 (中継) から来たアクセスには、--password (または環境変数 YOSOU_PASSWORD) のパスワードを必ず求める。
+パスワードが無いときは、Cloudflare からのアクセスは断る。
 """
+import base64
+import hmac
 import argparse
 import contextlib
 import datetime as dt
@@ -263,6 +267,7 @@ def make_handler(app):
     port = app.a.port
     # 127.0.0.1 のほかに通す Host。"." で始まるものはその後ろが同じ名前を全部 (例: .ts.net)
     extra = [h.strip().lower() for h in (getattr(app.a, "allow_host", None) or []) if h.strip()]
+    password = getattr(app.a, "password", None) or os.environ.get("YOSOU_PASSWORD") or ""
 
     class Handler(BaseHTTPRequestHandler):
         def send(self, code, body, ctype="application/json; charset=utf-8"):
@@ -280,9 +285,42 @@ def make_handler(app):
             name = host.rsplit(":", 1)[0]
             return any(name.endswith(h) if h.startswith(".") else name == h for h in extra)
 
+        def from_outside(self):
+            """中継 (Cloudflare Tunnel・Tailscale など) を通って来たか"""
+            host = self.headers.get("Host", "").lower()
+            return (host not in (f"127.0.0.1:{port}", f"localhost:{port}")
+                    or any(self.headers.get(h) for h in ("Cf-Connecting-Ip", "X-Forwarded-For", "Tailscale-User-Login")))
+
+        def auth_ok(self):
+            """外から来たアクセスはパスワードが要る (ユーザー名は何でもよい)。通らなければ返事をして False"""
+            if not self.from_outside():
+                return True
+            if not password:
+                if self.headers.get("Cf-Connecting-Ip"):  # インターネットからなのにパスワードが無い
+                    self.send(403, {"error": "外から使うには --password か YOSOU_PASSWORD でパスワードを決めてください"})
+                    return False
+                return True  # Tailscale (自分の端末だけ) はパスワードなしでもよい
+            got = ""
+            h = self.headers.get("Authorization", "")
+            if h.startswith("Basic "):
+                try:
+                    got = base64.b64decode(h[6:]).decode("utf-8").split(":", 1)[1]
+                except Exception:
+                    got = ""
+            if hmac.compare_digest(got.encode("utf-8"), password.encode("utf-8")):
+                return True
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="BoatRaceYosou", charset="UTF-8"')
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("パスワードが違います".encode("utf-8"))
+            return False
+
         def do_GET(self):
             if not self.host_ok():
                 return self.send(403, {"error": "forbidden"})
+            if not self.auth_ok():
+                return
             u = urlparse(self.path)
             q = parse_qs(u.query)
             date = (q.get("date") or [dt.date.today().isoformat()])[0]
@@ -318,6 +356,8 @@ def make_handler(app):
             # ほかのサイトから送れないように: Host と独自ヘッダー (付けるとブラウザが事前確認をするので、よそからは送れない)
             if not self.host_ok() or self.headers.get("X-Yosou") != "1":
                 return self.send(403, {"error": "forbidden"})
+            if not self.auth_ok():
+                return
             if urlparse(self.path).path != "/api/run":
                 return self.send(404, {"error": "not found"})
             try:

@@ -222,6 +222,16 @@ LightGBM で各艇の1着確率を出し、2・3着は Harville 型（1着を除
 
 **GPU**: 学習は LightGBM の GPU 版（OpenCL）を使う。NVIDIA・AMD・Intel のグラフィックドライバーが入っていれば自動で GPU、使えなければ CPU の全コアで学習する（`set YOSOU_DEVICE=cpu` で CPU に固定）。特徴量づくり（過去成績の集計）は CPU。
 
+### スマホ・iPad から、家の外でもパソコンのサーバーを使う（Cloudflare Tunnel）
+
+パソコンのサーバーを Cloudflare Tunnel でインターネットから開けるようにする。ルーターの設定（ポート開放）はいらない。**インターネット全体に出るので、パスワードを必ず決める**（決めていないと、外からのアクセスは断る）。
+
+- お試し（無料・アカウント不要。起動のたびに URL が変わる）
+  1. `winget install Cloudflare.cloudflared`
+  2. サーバーを `yosou serve --allow-host .trycloudflare.com --password <パスワード>` で起動（`set YOSOU_PASSWORD=<パスワード>` でも可）
+  3. `cloudflared tunnel --url http://127.0.0.1:8765` を実行し、表示された `https://〜.trycloudflare.com` をスマホで開く。ユーザー名は何でもよく、パスワードを入れる
+- 自分のドメイン（URL が固定。おすすめ）: ドメインを Cloudflare に入れ、Zero Trust の「Networks → Tunnels」でトンネルを作り、公開ホスト名（例: `yosou.example.com`）→ `http://127.0.0.1:8765` を登録。Zero Trust の「Access → Applications」で同じホスト名に自分のメールアドレスだけを許可すると、パスワードの前にメールのコードでのログインも付く。サーバーは `--allow-host yosou.example.com --password <パスワード>` で起動する
+
 ### スマホ・iPad から、家の外でもパソコンのサーバーを使う（Tailscale）
 
 パソコンのサーバー（予想する・答え合わせ・学習などのボタンも全部）を、スマホや iPad から家の外でも使えるようにする。インターネットに公開はせず、**自分の Tailscale アカウントでログインした端末だけ**が開ける（無料の個人プラン）。
