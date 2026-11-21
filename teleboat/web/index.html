@@ -85,7 +85,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       <button class="live" id="runLive">本番実行（購入まで）</button>
       <button id="stop">停止</button>
     </div>
-    <p class="note">実行すると、オンの投票パネル全部の舟券を1回のログインでまとめて買います（全体の上限まで。パネル1 → 2 → 3 の順）。</p>
+    <p class="note">実行すると、オンの投票パネル全部の舟券を1回のログインでまとめて買います（上限は投票パネルごとの1日・1か月の上限）。</p>
   </section>
 
   <section class="card" id="apBox" hidden style="border:2px solid var(--ng)">
@@ -105,9 +105,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       <h2>全体</h2>
       <div class="kv">
         <div><span>今日の合計</span><b id="spent">-</b></div>
-        <div><span>全体の1日の上限</span><b id="cap">-</b></div>
         <div><span>今月の合計</span><b id="monthSpent">-</b></div>
-        <div><span>全体の1か月の上限</span><b id="monthCap">-</b></div>
         <div><span>今日の入金</span><b id="deposit">-</b></div>
         <div><span>毎日の自動実行</span><b id="auto">-</b></div>
         <div><span>前回の結果</span><b id="last" style="font-size:14px">-</b></div>
@@ -144,8 +142,6 @@ select { max-width:100%; text-overflow:ellipsis; }
       <details id="setBox">
         <summary>全体の設定</summary>
         <div class="grid2" style="margin-top:12px">
-          <label>全体の1日の上限（円・全部のパネルの合計）<input id="capIn" type="number" step="100" min="100" inputmode="numeric"></label>
-          <label>全体の1か月の上限（円・0 = 決めない）<input id="monthCapIn" type="number" step="100" min="0" inputmode="numeric"></label>
           <label>毎日の自動実行の時刻<input id="auto_time" type="time"></label>
           <label>自動実行のときの動き
             <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
@@ -196,6 +192,7 @@ select { max-width:100%; text-overflow:ellipsis; }
           </select></label>
         <label data-for="value model hit roi long">1点の金額（円）<input id="p_stake" type="number" step="100" min="100" inputmode="numeric"></label>
         <label>このパネルの1日の上限（円）<input id="p_cap" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label>このパネルの1か月の上限（円・0 = 決めない）<input id="p_month_max" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1か月の投資金額（円）<input id="p_month_budget" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1日に買う最大の点数<input id="p_month_points" type="number" min="1" max="12" step="1" inputmode="numeric"></label>
         <label data-for="month" class="chk"><input id="p_month_reinvest" type="checkbox"> 今月の払戻も予算に足す（答え合わせが出た分）</label>
@@ -207,7 +204,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       </div>
       <div data-for="month" class="note" id="monthHelp">
         毎日の予算 = (1か月の投資金額 − 昨日までに使った分) ÷ 今日を入れた月の残りの日数（100円単位で切り捨て）。1点の金額 = 毎日の予算 ÷ 点数。
-        候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1日の上限・全体の上限も守ります）。
+        候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1日・1か月の上限も守ります）。
       </div>
       <div class="row" style="margin-top:12px">
         <button class="primary" id="p_save">このパネルを保存</button>
@@ -288,9 +285,7 @@ async function refresh() {
   confirmOn = st.confirm !== false;
   $("spent").textContent = yen(s.today.spent);
   $("deposit").textContent = yen(s.today.deposit);
-  $("cap").textContent = yen(st.cap);
   $("monthSpent").textContent = yen(s.month_spent);
-  $("monthCap").textContent = st.month_cap ? yen(st.month_cap) : "決めない";
   $("auto").textContent = st.auto ? `${st.auto_time}（${st.mode === "live" ? "本番" : "テスト"}）` : "オフ";
   $("last").textContent = s.last.result ? `${s.last.start.slice(11, 16)} ${s.last.result}` : "-";
   document.querySelectorAll("#tabs button").forEach((b) => {
@@ -300,7 +295,7 @@ async function refresh() {
   });
   if (tab) $("title").textContent = pname(tab);
   $("pcards").innerHTML = s.panels.map((p) => `<div class="pcard" data-p="${p.panel}"><b>${esc(p.name)}</b> <span class="badge ${p.on ? "on" : ""}">${p.on ? "オン" : "オフ"}</span>` +
-    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)}（${p.today_n}点）・今月 ${yen(p.month)}</div></div>`).join("");
+    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)} / 上限 ${yen(p.cap)}（${p.today_n}点）</div><div class="s">今月 ${yen(p.month)}${p.month_max ? " / 上限 " + yen(p.month_max) : ""}</div></div>`).join("");
   document.querySelectorAll(".pcard").forEach((c) => c.onclick = () => showTab(+c.dataset.p));
   const log = $("log");
   stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
@@ -311,7 +306,7 @@ async function refresh() {
   $("s_panel").textContent = st.panel_pw_set ? "（設定済み）" : "（未設定）";
   if (!filled) {
     filled = true;
-    $("capIn").value = st.cap; $("monthCapIn").value = st.month_cap || 0; $("auto_time").value = st.auto_time; $("mode").value = st.mode;
+    $("auto_time").value = st.auto_time; $("mode").value = st.mode;
     $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
   }
@@ -331,7 +326,7 @@ function fillPanel() {
   pFilled = tab;
   const p = S.settings.panels[tab - 1];
   $("p_on").checked = p.on; $("p_name").value = p.name || ""; $("p_strategy").value = p.strategy;
-  $("p_stake").value = p.stake; $("p_cap").value = p.cap; $("p_per_race").value = p.per_race || 1;
+  $("p_stake").value = p.stake; $("p_cap").value = p.cap; $("p_month_max").value = p.month_max || 0; $("p_per_race").value = p.per_race || 1;
   $("p_min_prob").value = Math.round((p.min_prob || 0) * 100); $("p_min_ev").value = p.min_ev ?? 1; $("p_min_odds").value = p.min_odds ?? 1;
   $("p_month_budget").value = p.month_budget; $("p_month_points").value = p.month_points; $("p_month_reinvest").checked = p.month_reinvest;
   $("siteSum").textContent = siteText(p);
@@ -342,7 +337,7 @@ function fillPanel() {
 $("p_save").onclick = async () => {
   const i = tab;
   const body = {panel: i, on: $("p_on").checked, name: $("p_name").value.trim(), strategy: $("p_strategy").value,
-    stake: +$("p_stake").value, cap: +$("p_cap").value, per_race: +$("p_per_race").value || 1,
+    stake: +$("p_stake").value, cap: +$("p_cap").value, month_max: +$("p_month_max").value || 0, per_race: +$("p_per_race").value || 1,
     min_prob: (+$("p_min_prob").value || 0) / 100, min_ev: +$("p_min_ev").value || 0, min_odds: +$("p_min_odds").value || 1,
     month_budget: +$("p_month_budget").value || 0, month_points: +$("p_month_points").value || 3, month_reinvest: $("p_month_reinvest").checked};
   try {
@@ -371,7 +366,7 @@ async function loadPlan() {
     });
     const head = document.createElement("div");
     head.className = "msg";
-    head.innerHTML = notes.join("<br>") + (tab ? "" : `<br>全体: 今日の残りの上限 ${yen(p.room)}・買う合計 ${yen(rows.reduce((a, x) => a + x.stake, 0))}`);
+    head.innerHTML = notes.join("<br>") + (tab ? "" : `<br>合計: 今日の残りの上限 ${yen(p.room)}・買う合計 ${yen(rows.reduce((a, x) => a + x.stake, 0))}`);
     const t = document.createElement("div");
     t.className = "scroll";
     t.innerHTML = rows.length ? "<table><tr><th>締切</th>" + (tab ? "" : "<th>パネル</th>") + "<th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
@@ -383,7 +378,7 @@ async function loadPlan() {
 
 let confirmOn = true;
 async function run(mode) {
-  if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、オンの投票パネルの舟券を購入まで行います（全体の上限まで）。よろしいですか？")) return;
+  if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、オンの投票パネルの舟券を購入まで行います（投票パネルごとの上限まで）。よろしいですか？")) return;
   try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
   setTimeout(refresh, 500);
 }
@@ -452,7 +447,7 @@ async function loadResults() {
 
 // ---- 全体の設定 ----
 $("save").onclick = async () => {
-  const body = {cap: +$("capIn").value, month_cap: +$("monthCapIn").value || 0, auto_time: $("auto_time").value, mode: $("mode").value,
+  const body = {auto_time: $("auto_time").value, mode: $("mode").value,
     auto: $("autoIn").checked, deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, headless: $("headless").checked};
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
   if ($("panel_password").value) body.panel_password = $("panel_password").value;
@@ -497,7 +492,7 @@ async function fromSite() {
     say("サイトから来た設定が読めませんでした", true); return;
   }
   o.site_budget = Math.floor(o.site_budget); o.site_points = Math.floor(o.site_points);
-  if (!confirm("予想サイトで決めた設定を、投票パネル1の選び方にしますか？\n\n" + siteText(o) + "\n\n投票パネル1・全体の1日の上限（今の設定）は超えません。")) { say("サイトの設定は保存しませんでした"); return; }
+  if (!confirm("予想サイトで決めた設定を、投票パネル1の選び方にしますか？\n\n" + siteText(o) + "\n\n投票パネル1の1日・1か月の上限（今の設定）は超えません。")) { say("サイトの設定は保存しませんでした"); return; }
   try { await api("/api/settings", o); say("サイトの設定を保存しました。投票パネル1の選び方は「サイトの設定」になりました"); await refreshOnce(); pFilled = 0; fillPanel(); loadPlan(); }
   catch (e) { say("保存できませんでした: " + e.message, true); }
 }

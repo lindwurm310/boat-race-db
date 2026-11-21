@@ -195,7 +195,8 @@ class App:
             mine = [t for t in tickets if t["panel"] == i]
             spent = sum(t.get("stake", 0) for t in mine)
             panels.append({"panel": i, "name": store.panel_name(p, i), "on": p["on"], "strategy": p["strategy"],
-                           "today": spent, "today_n": len(mine), "month": month.get(i, {}).get("spent_before", 0) + spent})
+                           "today": spent, "today_n": len(mine), "month": month.get(i, {}).get("spent_before", 0) + spent,
+                           "cap": p["cap"], "month_max": p["month_max"]})
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at,

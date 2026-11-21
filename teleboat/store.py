@@ -24,9 +24,7 @@ SHOTS = os.path.join(BASE, "shots")
 SECRET_KEYS = ("memberNo", "pin", "authPassword", "betPassword")
 
 DEFAULTS = {
-    # ---- 全体 (メインパネル) ----
-    "cap": 4000,           # 1日の上限 (円・全部の投票パネルの合計)。入金も購入もこれを超えない
-    "month_cap": 0,        # 1か月の上限 (円・全部の投票パネルの合計)。0 = 決めない
+    # ---- 全体 (メインパネル)。上限は投票パネルごとに決める ----
     "auto": True,          # 毎日 auto_time に自動で実行する
     "auto_time": "09:30",
     "mode": "test",        # test = 購入の直前で止める / live = 購入まで行う
@@ -43,6 +41,7 @@ PANEL_DEFAULTS = {
     "on": False,           # この投票パネルで買う
     "stake": 100,          # 1点の金額 (円)
     "cap": 1000,           # このパネルの1日の上限 (円)
+    "month_max": 0,        # このパネルの1か月の上限 (円)。0 = 決めない
     # 買う舟券の選び方 (単勝)
     #   value = 回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点)
     #   month = 月の予算でやりくり (1か月の予算を残りの日数で割って、その日の予算で回収率重視と同じ条件の上位を買う)
@@ -161,6 +160,8 @@ def load_settings():
             _write(d)
     out = {k: d.get(k, v) for k, v in DEFAULTS.items()}
     out["panels"] = _panels(d)
+    # 1日に入金・購入する上限 = オンの投票パネルの1日の上限の合計 (全体の上限は無い)
+    out["cap"] = sum(p["cap"] for p in out["panels"] if p["on"])
     out["token"] = d["token"]
     out["secrets_set"] = {k: bool(d.get("secret_" + k)) for k in SECRET_KEYS}
     out["panel_pw_set"] = bool(d.get("panel_pw"))
@@ -228,6 +229,8 @@ def _check_panel(p, i):
         raise ValueError(f"{name}: サイトの設定の期待値・1着確率がおかしいです")
     if p["site_budget"] < 0 or p["site_points"] < 0:
         raise ValueError(f"{name}: サイトの設定の予算・点数は0以上にしてください")
+    if p["month_max"] < 0 or p["month_max"] % 100:
+        raise ValueError(f"{name}: 1か月の上限は100円単位にしてください (0 = 決めない)")
     if p["month_budget"] < 0 or p["month_budget"] % 100:
         raise ValueError(f"{name}: 1か月の投資金額は100円単位にしてください")
     if not 1 <= p["month_points"] <= 12:
@@ -262,13 +265,9 @@ def save_settings(new):
                     p[k] = _typed(v, new[k])
         for i, p in enumerate(panels, 1):
             _check_panel(p, i)
-        if d.get("cap", 4000) < 100:
-            raise ValueError("全体の1日の上限は100円以上にしてください")
-        if d.get("month_cap", 0) < 0:
-            raise ValueError("全体の1か月の上限は0円以上にしてください (0 = 決めない)")
         if d.get("mode") not in ("test", "live"):
             d["mode"] = "test"
-        for k in LEGACY_PANEL_KEYS:  # 投票パネル1に引き継いだので消す
+        for k in LEGACY_PANEL_KEYS + ("cap", "month_cap"):  # 投票パネルに引き継いだ・やめた全体の上限は消す
             d.pop(k, None)
         d["panels"] = panels
         for k in SECRET_KEYS:

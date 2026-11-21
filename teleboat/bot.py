@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-21b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-22a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -170,6 +170,11 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
     by_ev = sorted(late, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
     room = max(0, cap - state.get("spent", 0))
     limit_by = f"このパネルの1日の上限 {cap:,}円"
+    mmax = int(settings.get("month_max") or 0)
+    if mmax:
+        mroom = max(0, mmax - int((month or {}).get("spent_before", 0)) - state.get("spent", 0))
+        if mroom < room:
+            room, limit_by = mroom, f"このパネルの1か月の上限 {mmax:,}円"
     if room_limit is not None and room_limit < room:
         room, limit_by = max(0, room_limit), "全体の上限"
     note = ""
@@ -212,8 +217,8 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
         want = by_ev[:n]
     else:
         want = by_ev[: room // stake]
-        if len(by_ev) > len(want) and limit_by == "全体の上限":
-            note = f"全体の上限で {len(want)}点 に減らしました"
+        if len(by_ev) > len(want) and "1か月" in limit_by:
+            note = f"{limit_by}で {len(want)}点 に減らしました"
     n = len(want) if balance is None else min(len(want), max(0, balance) // stake)
     return {
         "want": want,                 # 上限だけで選んだ分 (入金額を決める)
@@ -226,24 +231,14 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
     }
 
 
-def global_room(settings, state, month_total_before=0):
-    """全体の上限 (1日・1か月) から見た、今日あと買える金額"""
-    spent = state.get("spent", 0)
-    room = settings["cap"] - spent
-    if settings.get("month_cap"):
-        room = min(room, settings["month_cap"] - month_total_before - spent)
-    return max(0, room)
-
-
 def plan_all(rows, settings, state, month=None, balance=None, now=None, date=None):
-    """オンの投票パネルを 1 → 2 → 3 の順に計算する。全体の上限は先のパネルから使う。
+    """オンの投票パネルを 1 → 2 → 3 の順に計算する。上限はパネルごと (1日・1か月)。
     month: {"total_before": 昨日までの今月の合計, 1: {"spent_before", "payout"}, ...}
     返す: panels (パネルごとの plan)、items (買う舟券。panel と stake つき)、room (全体の残り)"""
     month = month or {}
     date = date or store.today()
     tickets = store.day_tickets(state, date)
-    groom = global_room(settings, state, month.get("total_before", 0))
-    left = groom
+    groom = 0  # 今日あと買える金額 = オンのパネルの残りの合計
     panels, items = [], []
     for i, ps in enumerate(settings["panels"], 1):
         name = store.panel_name(ps, i)
@@ -252,9 +247,9 @@ def plan_all(rows, settings, state, month=None, balance=None, now=None, date=Non
             continue
         mine = [t for t in tickets if t["panel"] == i]
         pst = {"bought": [t["key"] for t in mine], "spent": sum(t.get("stake", 0) for t in mine)}
-        p = plan(picks(rows, ps), ps, pst, None, now, left, month.get(i), date)
+        p = plan(picks(rows, ps), ps, pst, None, now, None, month.get(i), date)
         p.update(panel=i, name=name, on=True, strategy=STRATEGIES.get(ps.get("strategy", "value")))
-        left -= p["stake"] * len(p["want"])
+        groom += p["room"]
         panels.append(p)
         items.extend(dict(x, panel=i, stake=p["stake"]) for x in p["want"])
     buy = items
@@ -403,7 +398,7 @@ class Run:
     def go(self, pw):
         on = [(i, p) for i, p in enumerate(self.s["panels"], 1) if p.get("on")]
         self.log(f"開始 [版 {VERSION}] ({'テスト: 購入の直前で止めます' if self.mode == 'test' else '本番: 購入まで行います'})"
-                 f"・全体の1日の上限{self.s['cap']:,}円" + (f"・1か月の上限{self.s['month_cap']:,}円" if self.s.get("month_cap") else "")
+                 f"・入金の上限 (オンのパネルの1日の上限の合計) {self.s['cap']:,}円"
                  + f"・投票パネル {'、'.join(str(i) for i, _ in on) or 'なし'}")
         for k, label in (("memberNo", "加入者番号"), ("pin", "暗証番号"), ("authPassword", "認証用パスワード"), ("betPassword", "投票用パスワード")):
             if not store.get_secret(k):
@@ -423,7 +418,7 @@ class Run:
                 continue
             self.log(f"{p['name']}: {p['strategy']}・1点{p['stake']:,}円・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
                      f"今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""))
-        self.log(f"全体: 今日の残りの上限 {pl['room']:,}円・今日買った {state.get('spent', 0):,}円")
+        self.log(f"オンのパネルの今日の残りの上限 合計 {pl['room']:,}円・今日買った {state.get('spent', 0):,}円")
         if not pl["items"]:
             self.log("買う買い目がありません")
             return
@@ -792,7 +787,7 @@ class Run:
         if not btn:
             raise BotError("「投票する」ボタンが見つかりません")
         # 上限の最後の確かめ
-        if state.get("spent", 0) + total > self.s["cap"] or total > room:
+        if total > room:
             raise BotError("今日の上限を超えるので止めます")
         self.log(f"{len(added)}点・{total:,}円 を購入します")
         self.click(f"#{btn}", "「投票する」")
