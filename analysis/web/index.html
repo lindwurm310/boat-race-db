@@ -452,14 +452,29 @@ const raceLink = (r, date) => {
   return h("a", {href: `https://www.boatrace.jp/owpc/pc/race/beforeinfo?rno=${+rno}&jcd=${jcd}&hd=${hd}`, target: "_blank",
     textContent: "直前情報"});
 };
-const PRED_COLS = date => [
+// 単勝の期待値 = 1着確率 × 予想オッズ (予想の買い目・おすすめ舟券・自動投票パネルと同じ定義)
+const laneOdds = (r, l) => { const o = r[`${l}号艇の予想オッズ`]; return o == null || o === "" || isNaN(o) ? null : +o; };
+// 買い目の艇は予想のときに計算した値 (丸める前のオッズで計算) を使う。ほかの艇は表の確率とオッズから計算する
+const laneEV = (r, l) => {
+  const buy = String(r["単勝買い目"] || "").split(" "), i = buy.indexOf(String(l));
+  if (i >= 0) { const v = String(r["買い目の期待値"] || "").split(" ")[i]; if (v && !isNaN(v)) return +v; }
+  const p = r[`${l}号艇`], o = laneOdds(r, l); return p == null || p === "" || o == null ? null : +p * o;
+};
+const bestEV = r => { let b = null; for (let l = 1; l <= 6; l++) { const v = laneEV(r, l); if (v != null && (!b || v > b.ev)) b = {l, ev: v}; } return b; };
+const evText = (v, strong) => v == null ? "" : h("span", {className: v >= 1 ? "rate-ok" : strong ? "" : "ng", textContent: v.toFixed(2)});
+const bestEVCol = ["最高期待値", r => { const b = bestEV(r); return b ? h("span", {}, lane(b.l), " ", evText(b.ev, true)) : ""; }, "",
+  r => { const b = bestEV(r); return b ? b.ev : null; }];
+// 1〜6号艇の列に出す数字 (今日の予想の「号艇ごとの数字」で切り替え)
+const LANE_VIEW = {p: ["1着確率", (r, l) => pct0(r[`${l}号艇`]), (r, l) => r[`${l}号艇`]],
+  ev: ["期待値", (r, l) => evText(laneEV(r, l)), laneEV],
+  odds: ["予想オッズ", (r, l) => { const o = laneOdds(r, l); return o == null ? "" : o.toFixed(1); }, laneOdds]};
+const PRED_COLS = (date, view = "p") => [
   ["締切", "締切"], ["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命選手", "本命選手", "l"],
   ["本命1着確率", r => pct0(r["本命1着確率"])], ["予想着順", "予想着順"], ["3連単上位5点", "3連単上位5点", "l"],
   ["判断", "判断", "l"],
   ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""],
-  ["予想オッズ", buyOdds], ["期待値", "買い目の期待値"],
-  ["1", r => pct0(r["1号艇"])], ["2", r => pct0(r["2号艇"])], ["3", r => pct0(r["3号艇"])],
-  ["4", r => pct0(r["4号艇"])], ["5", r => pct0(r["5号艇"])], ["6", r => pct0(r["6号艇"])],
+  ["予想オッズ", buyOdds], ["期待値", "買い目の期待値"], bestEVCol,
+  ...[1, 2, 3, 4, 5, 6].map(l => [String(l), r => (LANE_VIEW[view] || LANE_VIEW.p)[1](r, l), "", r => (LANE_VIEW[view] || LANE_VIEW.p)[2](r, l)]),
   ["公式", r => raceLink(r, date)],
 ];
 const buyRow = r => r["単勝買い目"] ? "buy" : "";
@@ -578,7 +593,7 @@ function adviceText(text) {
 }
 const MATOME_COLS = [["日付", "日付"], ["締切", "締切"], ["場", "場"], ["R", "R"], ["本命", r => lane(r["本命"])], ["本命選手", "本命選手", "l"],
   ["本命1着確率", r => pct0(r["本命1着確率"])], ["判断", "判断", "l"],
-  ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""], ["期待値", "買い目の期待値"],
+  ["単勝買い目", r => r["単勝買い目"] ? h("span", {className: "tag", textContent: r["単勝買い目"]}) : ""], ["期待値", "買い目の期待値"], bestEVCol,
   ["3連単上位5点", "3連単上位5点", "l"], ["5点の的中確率", r => pct0(r["3連単上位5点の的中確率"])], ["公式", r => raceLink(r)]];
 
 const truthy = v => v === true || v === "True" || v === "true" || v === 1;
@@ -810,12 +825,22 @@ const PAGES = {
         const j = await api(`/api/predictions?date=${d.value}`);
         const nbuy = j.rows.filter(r => r["単勝買い目"]).length;
         const tb = h("div");
+        let view = "p";
+        try { view = localStorage.getItem("laneView") || "p"; } catch {}
+        if (!LANE_VIEW[view]) view = "p";
+        let shown = j.rows;
+        const draw = () => tb.replaceChildren(table(PRED_COLS(d.value, view), shown, buyRow, "today-" + view));
+        const seg = h("div", {className: "bar", style: "margin:0 0 6px"}, h("span", {className: "note", textContent: "1〜6の列に出す数字:"}),
+          ...Object.entries(LANE_VIEW).map(([k, [label]]) => h("button", {className: "btn" + (k === view ? "" : " sub"), textContent: label, dataset: {v: k},
+            onclick: () => { view = k; try { localStorage.setItem("laneView", k); } catch {}
+              seg.querySelectorAll("button").forEach(b => b.className = "btn" + (b.dataset.v === k ? "" : " sub")); draw(); }})),
+          h("span", {className: "note", textContent: "期待値 = 1着確率 × 予想オッズ。1以上 (緑) なら、当たる確率のわりに配当が高い艇です。「最高期待値」はそのレースで期待値が一番高い艇。"}));
         out.replaceChildren(
           h("p", {className: "note"}, `${j.rows.length}レース。単勝の買い目 (期待値1以上) があるのは ${nbuy}レースで、最初はそのレースだけを出しています (「単勝の買い目があるレースだけ」を外すと全部)。` +
             "予想オッズは前日までのデータから見積もったオッズです。実際のオッズが予想オッズより低いと期待値が1を割るので、" +
             (STATIC ? "「直前情報」で公式サイトのオッズを確かめてから買ってください。" : "「直前情報」を開いて、ページの右下に出る実際のオッズでの予想を確かめてください。") +
             "行の色は場ごと、左の赤い線は買いのレース。表の見出しを押すと並べ替えます。"),
-          filterBar("today", j.rows, rows => tb.replaceChildren(table(PRED_COLS(d.value), rows, buyRow)), {buy: true}), tb);
+          filterBar("today", j.rows, rows => { shown = rows; draw(); }, {buy: true}), seg, tb);
       } catch (e) {
         out.replaceChildren(h("p", {}, e.message, hint("。「予想する」を押してください (番組表は前日〜当日朝に公開されます)。")));
       }
