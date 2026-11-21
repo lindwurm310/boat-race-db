@@ -98,38 +98,41 @@ class App:
     def running(self):
         return bool(self.thread and self.thread.is_alive())
 
-    def start(self, mode, why="手動", only=None, stake=None):
+    def start(self, mode, why="手動", only=None):
         if self.running():
             return False, "すでに実行中です"
         s = store.load_settings()
         if mode not in ("test", "live"):
             mode = s["mode"]
         self.stop.clear()
-        self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, stake), daemon=True)
+        month = self.month_ctx(s)
+        self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, month), daemon=True)
         self.thread.start()
         return True, "開始しました"
 
     # ---- 購入前の確認 ----
     # 本番で買う前に、今の設定で買う舟券を state["approval"] に置いてパネルに出す。
-    # 「購入する」を押すと、その買い目だけ (同じ1点の金額で) 本番で買う。日が変わると消える
+    # 「購入する」を押すと、その買い目だけ (同じパネル・同じ金額で) 本番で買う。日が変わると消える
     def prepare(self, why="手動"):
         if self.running():
             return False, "すでに実行中です"
         p = self.plan()
         if p.get("error"):
             return False, p["error"]
-        rows = sorted(p["want"], key=lambda x: -x.get("score", x["ev"]))
+        rows = p["items"]
         if not rows:
             return False, "今買える買い目がありません"
-        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev")
+        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev", "panel", "stake")
+        names = {x["panel"]: x["name"] for x in p["panels"]}
+        notes = [f"{x['name']}: {x['note']}" for x in p["panels"] if x.get("note")]
         ap = {"id": secrets.token_hex(6), "why": why, "at": dt.datetime.now().strftime("%H:%M"),
-              "stake": p["stake"], "total": p["stake"] * len(rows), "strategy": p.get("strategy", ""),
-              "note": p.get("note", ""), "rows": [{k: x.get(k) for k in keep} for x in rows]}
+              "total": sum(x["stake"] for x in rows), "note": " / ".join(notes),
+              "rows": [dict({k: x.get(k) for k in keep}, name=names.get(x["panel"], "")) for x in rows]}
         st = store.load_state()
         st["approval"] = ap
         store.save_state(st)
-        self.log(f"購入前の確認 ({why}): " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']}" for x in rows) +
-                 f" ・1点{ap['stake']:,}円・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います")
+        self.log(f"購入前の確認 ({why}): " + "、".join(f"[{x['panel']}]{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in rows) +
+                 f" ・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います")
         return True, "買う舟券を出しました。確かめて「購入する」を押してください"
 
     def approve(self, aid):
@@ -141,7 +144,8 @@ class App:
             return False, "すでに実行中です"
         st.pop("approval", None)
         store.save_state(st)
-        return self.start("live", f"{ap['why']}・確認して購入", [x["key"] for x in ap["rows"]], ap["stake"])
+        only = {f"{x.get('panel') or 1}:{x['key']}": x.get("stake") or ap.get("stake") for x in ap["rows"]}
+        return self.start("live", f"{ap['why']}・確認して購入", only)
 
     def reject(self):
         st = store.load_state()
@@ -150,9 +154,9 @@ class App:
             self.log("購入前の確認で「やめる」を押したので買いません")
         return True, "やめました"
 
-    def _work(self, s, mode, why, only=None, stake=None):
+    def _work(self, s, mode, why, only=None, month=None):
         from playwright.sync_api import sync_playwright
-        r = bot.Run(s, self.log, self.shot, self.stop, mode, only, stake)
+        r = bot.Run(s, self.log, self.shot, self.stop, mode, only, month)
         self.current = r
         t0 = time.time()
         self.last = {"start": dt.datetime.now().isoformat(timespec="seconds"), "mode": mode, "why": why, "result": "実行中"}
@@ -183,10 +187,20 @@ class App:
         s.pop("token", None)
         with self.lock:
             lines = list(self.lines)[-400:]
+        today = store.today()
+        tickets = store.day_tickets(st, today)
+        month = self.month_ctx(s, payout=False)
+        panels = []
+        for i, p in enumerate(s["panels"], 1):
+            mine = [t for t in tickets if t["panel"] == i]
+            spent = sum(t.get("stake", 0) for t in mine)
+            panels.append({"panel": i, "name": store.panel_name(p, i), "on": p["on"], "strategy": p["strategy"],
+                           "today": spent, "today_n": len(mine), "month": month.get(i, {}).get("spent_before", 0) + spent})
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at,
-            "version": bot.VERSION, "date": store.today(), "now": dt.datetime.now().strftime("%H:%M:%S"),
+            "month_spent": month.get("total_before", 0) + st.get("spent", 0), "panels": panels,
+            "version": bot.VERSION, "date": today, "now": dt.datetime.now().strftime("%H:%M:%S"),
         }
 
     def plan(self):
@@ -195,9 +209,70 @@ class App:
             rows = bot.fetch_predictions(store.today()).get("rows", [])
         except Exception as e:
             return {"error": f"今日の予想が読めません: {e}"}
-        p = bot.plan(bot.picks(rows, s), s, store.load_state())
-        p["strategy"] = bot.STRATEGIES.get(s.get("strategy", "value"))
-        return {k: v for k, v in p.items()}
+        return bot.plan_all(rows, s, store.load_state(), self.month_ctx(s))
+
+    def month_ctx(self, s=None, payout=True, date=None):
+        """今月の昨日までに使った金額 (全体・パネルごと) と、「月の予算」で払戻を足すパネルの今月の払戻"""
+        s = s or store.load_settings()
+        date = date or store.today()
+        need_pay = payout and any(p["on"] and p["strategy"] == "month" and p["month_reinvest"] for p in s["panels"])
+        out = {"total_before": 0}
+        for i in range(1, store.PANELS + 1):
+            out[i] = {"spent_before": 0, "payout": 0}
+        for d in store.state_dates():
+            if d[:7] != date[:7] or d >= date:
+                continue
+            st = store.load_state(d)
+            out["total_before"] += st.get("spent", 0)
+            if need_pay:
+                tickets = self.settle(d, store.day_tickets(st, d))
+            else:
+                tickets = store.day_tickets(st, d)
+            for t in tickets:
+                m = out.setdefault(t["panel"], {"spent_before": 0, "payout": 0})
+                m["spent_before"] += t.get("stake", 0)
+                m["payout"] += t.get("payout", 0)
+        return out
+
+    def check(self, date):
+        """その日の答え合わせ (前の日の分だけ。読めたら覚えておく)"""
+        chk = self.check_cache.get(date)
+        if chk is None and date < store.today():
+            try:
+                chk = bot.fetch_check(date)
+            except Exception:
+                chk = None
+            if chk:
+                self.check_cache[date] = chk
+        return chk
+
+    def settle(self, date, tickets):
+        """舟券ごとに 結果・払戻 を入れる"""
+        res = {r["race_id"]: r for r in (self.check(date) or {}).get("rows", [])}
+        out = []
+        for t in sorted(tickets, key=lambda t: t.get("deadline") or ""):
+            t = dict(t)
+            t.setdefault("venue", "")
+            if not t["venue"]:
+                t["venue"] = bot.JYO.get(t["race_id"].split("-")[1], "")
+            r = res.get(t["race_id"])
+            first = str((r or {}).get("結果") or "").split("-")[0]
+            t["payout"], t["settled"] = 0, False
+            if not r or not first:
+                t["result"] = "結果待ち"
+            else:
+                win = first == str(t["boat"])
+                t["win"] = win
+                t["finish"] = r.get("結果")
+                if win and r.get("単勝配当") is None:  # 配当がまだ入っていない
+                    t["result"] = "的中 (配当待ち)"
+                else:
+                    t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
+                    t["odds_paid"] = r.get("単勝配当") if win else None
+                    t["payout"] = int(r["単勝配当"] * t["stake"] / 100) if win else 0
+                    t["settled"] = True
+            out.append(t)
+        return out
 
     def fix_1117(self):
         """11/17 は購入を記録する前の版で買ったので、ログに残った 10点をあとから記録する (1回だけ)"""
@@ -211,64 +286,72 @@ class App:
         store.save_state(st, "2026-11-17")
         self.log("11/17 にログで確かめた 10点・1,000円 を購入の記録に加えました")
 
-    def results(self, days=60):
-        """自動購入した舟券の的中と金額。答え合わせ (翌朝) が出た日だけ当たり外れが分かる"""
+    def results(self, panel=None, days=400):
+        """自動購入した舟券の的中と金額 (panel を決めればそのパネルだけ)。答え合わせ (翌朝) が出た日だけ当たり外れが分かる。
+        days: 日ごと、months: 月ごと、total: 全部"""
         s = store.load_settings()
-        try:
-            names = sorted((f[:-5] for f in os.listdir(store.STATE_DIR) if f.endswith(".json")), reverse=True)[:days]
-        except OSError:
-            names = []
-        out, tot = [], {"stake": 0, "settled": 0, "payout": 0, "n": 0, "hit": 0, "pending": 0}
+        names = sorted(store.state_dates(), reverse=True)[:days]
+        keys = ("stake", "settled", "payout", "n", "hit", "pending")
+        out, months, tot = [], {}, dict.fromkeys(keys, 0)
         for date in names:
             st = store.load_state(date)
-            tickets = st.get("tickets") or []
-            known = {t["key"] for t in tickets}
-            for k in st.get("bought", []):  # 古い版の記録 (買い目のキーだけ)
-                if k in known:
-                    continue
-                d8, jcd, rno, boat = k.split("-")
-                tickets.append({"key": k, "race_id": f"{d8}-{jcd}-{rno}", "venue": bot.JYO.get(jcd, jcd), "rno": int(rno),
-                                "boat": boat, "stake": s["stake"]})
+            tickets = [t for t in store.day_tickets(st, date) if panel is None or t["panel"] == panel]
             if not tickets:
                 continue
-            chk = self.check_cache.get(date)
-            if chk is None and date < store.today():
-                try:
-                    chk = bot.fetch_check(date)
-                except Exception:
-                    chk = None
-                if chk:
-                    self.check_cache[date] = chk
-            res = {r["race_id"]: r for r in (chk or {}).get("rows", [])}
-            day = {"date": date, "stake": 0, "settled": 0, "payout": 0, "n": 0, "hit": 0, "pending": 0, "tickets": []}
-            for t in sorted(tickets, key=lambda t: t.get("deadline") or ""):
-                r = res.get(t["race_id"])
-                first = str((r or {}).get("結果") or "").split("-")[0]
-                t = dict(t)
-                if not r or not first:
-                    t["result"] = "結果待ち"
-                    t["payout"] = 0
-                    day["pending"] += 1
-                else:
-                    win = first == str(t["boat"])
-                    if win and r.get("単勝配当") is None:  # 配当がまだ入っていない
-                        t["result"] = "的中 (配当待ち)"
-                        t["payout"] = 0
-                        day["pending"] += 1
-                        day["hit"] += 1
-                    else:
-                        t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
-                        t["payout"] = int(r["単勝配当"] * t["stake"] / 100) if win else 0
-                        day["hit"] += win
-                        day["settled"] += t["stake"]
+            day = dict.fromkeys(keys, 0)
+            day.update(date=date, tickets=[])
+            for t in self.settle(date, tickets):
+                t["panel_name"] = store.panel_name(s["panels"][t["panel"] - 1], t["panel"]) if 1 <= t["panel"] <= store.PANELS else ""
                 day["stake"] += t["stake"]
                 day["payout"] += t["payout"]
                 day["n"] += 1
+                day["hit"] += bool(t.get("win"))
+                if t["settled"]:
+                    day["settled"] += t["stake"]
+                else:
+                    day["pending"] += 1
                 day["tickets"].append(t)
-            for k in ("stake", "settled", "payout", "n", "hit", "pending"):
+            m = months.setdefault(date[:7], dict.fromkeys(keys, 0))
+            for k in keys:
                 tot[k] += day[k]
+                m[k] += day[k]
             out.append(day)
-        return {"days": out, "total": tot}
+        return {"days": out, "total": tot, "months": [dict(v, month=k) for k, v in sorted(months.items(), reverse=True)]}
+
+    def export(self, panel=None, fmt="csv"):
+        """収支の記録を表にする (Excel・Google スプレッドシートで開ける)。返す: (ファイル名, 中身, Content-Type)"""
+        r = self.results(panel, days=100000)
+        head = ["日付", "投票パネル", "選び方", "場", "R", "締切", "単勝", "金額", "1着確率", "予想オッズ", "期待値", "結果", "着順", "払戻", "収支", "買った時刻"]
+        rows = []
+        for d in sorted(r["days"], key=lambda d: d["date"]):
+            for t in d["tickets"]:
+                rows.append([d["date"], t.get("panel_name") or f"投票パネル{t['panel']}",
+                             bot.STRATEGIES.get(t.get("strategy") or "", "").split(" (")[0], t.get("venue", ""), t.get("rno"),
+                             t.get("deadline", ""), int(t["boat"]), t["stake"],
+                             None if t.get("prob") is None else round(t["prob"], 3),
+                             None if t.get("odds") is None else round(t["odds"], 1),
+                             None if t.get("ev") is None else round(t["ev"], 2),
+                             t["result"], t.get("finish") or "", t["payout"] if t["settled"] else None,
+                             t["payout"] - t["stake"] if t["settled"] else None, t.get("at", "")])
+        mhead = ["月", "購入", "払戻", "収支 (結果が出た分)", "回収率", "的中", "点数", "結果待ち"]
+        mrows = [[m["month"], m["stake"], m["payout"], m["payout"] - m["settled"],
+                  round(m["payout"] / m["settled"], 3) if m["settled"] else None, m["hit"], m["n"], m["pending"]]
+                 for m in sorted(r["months"], key=lambda m: m["month"])]
+        t = r["total"]
+        mrows.append(["合計", t["stake"], t["payout"], t["payout"] - t["settled"],
+                      round(t["payout"] / t["settled"], 3) if t["settled"] else None, t["hit"], t["n"], t["pending"]])
+        name = f"teleboat_{'panel' + str(panel) if panel else 'all'}_{store.today()}"
+        if fmt == "xlsx":
+            import xlsx
+            return name + ".xlsx", xlsx.book([("舟券", [head] + rows), ("月ごと", [mhead] + mrows)]), \
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        import csv
+        import io
+        buf = io.StringIO()
+        w = csv.writer(buf, lineterminator="\r\n")
+        w.writerow(head)
+        w.writerows(["" if v is None else v for v in row] for row in rows)
+        return name + ".csv", ("\ufeff" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8"
 
     def scheduler(self):
         """毎日 auto_time に1回だけ実行する (パソコンが起きていれば、時刻を過ぎてから起きても 2 時間以内なら実行)"""
@@ -418,7 +501,13 @@ def make_handler(app):
                 elif u.path == "/api/status":
                     self.send(200, app.status())
                 elif u.path == "/api/results":
-                    self.send(200, app.results())
+                    pn = int(q.get("panel", ["0"])[0] or 0) or None
+                    self.send(200, app.results(pn))
+                elif u.path == "/api/export":
+                    pn = int(q.get("panel", ["0"])[0] or 0) or None
+                    fn, body, ctype = app.export(pn, q.get("fmt", ["csv"])[0])
+                    from urllib.parse import quote
+                    self.send(200, body, ctype, {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fn)}"})
                 elif u.path == "/api/plan":
                     self.send(200, app.plan())
                 elif u.path == "/api/shot.png":

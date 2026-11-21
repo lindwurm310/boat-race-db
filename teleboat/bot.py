@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-21a"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-21b"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -62,6 +62,7 @@ def fetch_predictions(date):
 STRATEGIES = {
     "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
     "value": "回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上のうち、期待値の上位3点。1点の金額は設定のとおり)",
+    "month": "月の予算でやりくり (1か月の予算を残りの日数で割った額で、回収率重視と同じ条件の上位を買う)",
     "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
     "roi": "回収率 (期待値) の高い順",
@@ -82,7 +83,7 @@ def picks(rows, settings=None):
     各買い目: key, race_id, jcd, rno, venue, deadline, boat, prob (1着確率), odds (予想オッズ), ev (期待値), score (並べる値)"""
     s = settings or {}
     strategy = s.get("strategy", "value")
-    if strategy == "value":  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
+    if strategy in ("value", "month"):  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
         # 過去5年の検証 (analysis/osusume/README.md) で、その日の上位3点×300円が回収率と安定のバランスが一番良かった
         strategy, min_prob, min_ev = "roi", 0.10, 1.1
         min_odds, per_race = 0.0, 6
@@ -134,21 +135,55 @@ def picks(rows, settings=None):
 VALUE_POINTS, VALUE_FROM = 3, "11:00"  # 「回収率重視」の点数・締切の時刻 (1点の金額は設定の stake)
 
 
-def plan(all_picks, settings, state, balance=None, now=None):
-    """締切前・まだ買っていない買い目から、上限 (と残高) に収まる分を期待値の高い順に選ぶ"""
+def days_left(date):
+    """その月の残りの日数 (今日を入れる)"""
+    d = dt.date.fromisoformat(date)
+    nxt = (d.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+    return (nxt - d).days
+
+
+def month_budget_today(settings, month, date):
+    """「月の予算でやりくり」の今日の予算 = (1か月の予算 [+ 今月の払戻] − 昨日までに使った分) ÷ 今日を入れた残りの日数。
+    買わなかった日の分は次の日からに回る。今日の予算と、計算の説明を返す"""
+    m = month or {}
+    total = int(settings.get("month_budget") or 0)
+    back = int(m.get("payout", 0)) if settings.get("month_reinvest") else 0
+    left = max(0, total + back - int(m.get("spent_before", 0)))
+    n = days_left(date)
+    budget = left // n // 100 * 100
+    why = (f"今月の予算 {total:,}円" + (f" + 払戻 {back:,}円" if back else "") + f" − 昨日までに使った {int(m.get('spent_before', 0)):,}円"
+           f" = 残り {left:,}円 ÷ {n}日 → 今日の予算 {budget:,}円")
+    return budget, why
+
+
+def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, month=None, date=None):
+    """締切前・まだ買っていない買い目から、上限 (と残高) に収まる分を期待値の高い順に選ぶ。
+    settings: 投票パネル1つの設定 (cap はそのパネルの1日の上限)。state: そのパネルの今日の bought / spent。
+    room_limit: 全体の上限から見た残り (1日・1か月)。month: 「月の予算」の今月の使った分・払戻"""
     stake, cap = settings["stake"], settings["cap"]
     now = now or dt.datetime.now()
     cut = (now + dt.timedelta(minutes=MARGIN_MIN)).strftime("%H:%M")
     bought = set(state.get("bought", []))
     open_ = [p for p in all_picks if p["deadline"] > cut and p["key"] not in bought]
-    frm = {"site": settings.get("site_from") or "", "value": VALUE_FROM}.get(settings.get("strategy"), "")
+    frm = {"site": settings.get("site_from") or "", "value": VALUE_FROM, "month": VALUE_FROM}.get(settings.get("strategy"), "")
     late = [p for p in open_ if not frm or p["deadline"] >= frm]  # 締切がこの時刻より前のレースは除く
     by_ev = sorted(late, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
     room = max(0, cap - state.get("spent", 0))
+    limit_by = f"このパネルの1日の上限 {cap:,}円"
+    if room_limit is not None and room_limit < room:
+        room, limit_by = max(0, room_limit), "全体の上限"
     note = ""
     if settings.get("strategy") == "value":
         settings = dict(settings, site_budget=VALUE_POINTS * stake, site_points=VALUE_POINTS, site_from=VALUE_FROM)  # 1点 = 設定の金額
-    if settings.get("strategy") in ("site", "value"):
+    if settings.get("strategy") == "month":
+        budget, note = month_budget_today(settings, month, date or now.date().isoformat())
+        settings = dict(settings, site_budget=budget, site_points=int(settings.get("month_points") or 3), site_from=VALUE_FROM)
+        if budget < 100:
+            settings["site_points"] = 0
+            settings["site_budget"] = 0
+            note += "。今日は買いません"
+            by_ev = []
+    if settings.get("strategy") in ("site", "value", "month"):
         # サイトと同じ計算:
         #   点数を決めたとき: 1点 = 予算 ÷ 点数 (100円単位で切り捨て、最低100円)。点数 = min(点数, 予算/100)。
         #     候補が少ない日も1点の金額は上げない。今日買った分を差し引いても1点の金額は同じ
@@ -157,7 +192,9 @@ def plan(all_picks, settings, state, balance=None, now=None):
         budget, points = int(settings.get("site_budget") or 0), int(settings.get("site_points") or 0)
         spent = state.get("spent", 0)
         n = len(by_ev)
-        if budget and points:
+        if settings.get("strategy") == "month" and not budget:
+            n = 0
+        elif budget and points:
             pts = min(points, budget // 100)
             stake = max(100, budget // pts // 100 * 100) if pts else 100
             n = min(n, max(0, pts - len(bought)), max(0, budget - spent) // stake)
@@ -170,11 +207,13 @@ def plan(all_picks, settings, state, balance=None, now=None):
         else:
             stake = 100
         if n * stake > room:
-            note = f"1日の上限 {cap:,}円 を超えるので {room // stake}点 に減らしました"
+            note = (note + "。" if note else "") + f"{limit_by}を超えるので {room // stake}点 に減らしました"
             n = room // stake
         want = by_ev[:n]
     else:
         want = by_ev[: room // stake]
+        if len(by_ev) > len(want) and limit_by == "全体の上限":
+            note = f"全体の上限で {len(want)}点 に減らしました"
     n = len(want) if balance is None else min(len(want), max(0, balance) // stake)
     return {
         "want": want,                 # 上限だけで選んだ分 (入金額を決める)
@@ -187,6 +226,51 @@ def plan(all_picks, settings, state, balance=None, now=None):
     }
 
 
+def global_room(settings, state, month_total_before=0):
+    """全体の上限 (1日・1か月) から見た、今日あと買える金額"""
+    spent = state.get("spent", 0)
+    room = settings["cap"] - spent
+    if settings.get("month_cap"):
+        room = min(room, settings["month_cap"] - month_total_before - spent)
+    return max(0, room)
+
+
+def plan_all(rows, settings, state, month=None, balance=None, now=None, date=None):
+    """オンの投票パネルを 1 → 2 → 3 の順に計算する。全体の上限は先のパネルから使う。
+    month: {"total_before": 昨日までの今月の合計, 1: {"spent_before", "payout"}, ...}
+    返す: panels (パネルごとの plan)、items (買う舟券。panel と stake つき)、room (全体の残り)"""
+    month = month or {}
+    date = date or store.today()
+    tickets = store.day_tickets(state, date)
+    groom = global_room(settings, state, month.get("total_before", 0))
+    left = groom
+    panels, items = [], []
+    for i, ps in enumerate(settings["panels"], 1):
+        name = store.panel_name(ps, i)
+        if not ps.get("on"):
+            panels.append({"panel": i, "name": name, "on": False})
+            continue
+        mine = [t for t in tickets if t["panel"] == i]
+        pst = {"bought": [t["key"] for t in mine], "spent": sum(t.get("stake", 0) for t in mine)}
+        p = plan(picks(rows, ps), ps, pst, None, now, left, month.get(i), date)
+        p.update(panel=i, name=name, on=True, strategy=STRATEGIES.get(ps.get("strategy", "value")))
+        left -= p["stake"] * len(p["want"])
+        panels.append(p)
+        items.extend(dict(x, panel=i, stake=p["stake"]) for x in p["want"])
+    buy = items
+    if balance is not None:
+        buy, used = [], 0
+        for x in items:
+            if used + x["stake"] <= balance:
+                buy.append(x)
+                used += x["stake"]
+    return {"panels": panels, "items": items, "buy": buy, "room": groom, "spent": state.get("spent", 0)}
+
+
+def item_id(x):
+    return f"{x['panel']}:{x['key']}"
+
+
 def digits(s):
     v = re.sub(r"[^0-9]", "", s or "")
     return int(v) if v else None
@@ -194,11 +278,11 @@ def digits(s):
 
 # ---------------- 実行 ----------------
 class Run:
-    def __init__(self, settings, log, shot, stop_event, mode=None, only=None, stake=None):
+    def __init__(self, settings, log, shot, stop_event, mode=None, only=None, month=None):
         self.s = settings
         self.mode = mode or settings["mode"]
-        self.only = set(only) if only is not None else None  # パネルで確かめた買い目のキー。これ以外は買わない
-        self.only_stake = stake                               # 確かめたときの1点の金額。違ったら止める
+        self.only = dict(only) if only is not None else None  # パネルで確かめた買い目 {"パネル:キー": 金額}。これ以外は買わない
+        self.month = month or {}                              # 今月の使った分・払戻 (上限と「月の予算」の計算)
         self.log = log            # log(str)
         self.shot_cb = shot       # shot(page, name)
         self.stop = stop_event
@@ -303,9 +387,24 @@ class Run:
             return fn(*a)
 
     # ---- 本体 ----
+    def make_plan(self, rows, state, balance=None):
+        pl = plan_all(rows, self.s, state, self.month, balance, date=self.date)
+        if self.only is not None:
+            ids = {item_id(x): x for x in pl["items"]}
+            for k, stake in self.only.items():
+                if k in ids and ids[k]["stake"] != stake:
+                    x = ids[k]
+                    raise BotError(f"{x['venue']}{x['rno']}R 単勝{x['boat']} の金額が確認したとき ({stake:,}円) と今 ({x['stake']:,}円) で違うので止めます。"
+                                   "もう一度確認してください")
+            pl["items"] = [x for x in pl["items"] if item_id(x) in self.only]
+            pl["buy"] = [x for x in pl["buy"] if item_id(x) in self.only]
+        return pl
+
     def go(self, pw):
+        on = [(i, p) for i, p in enumerate(self.s["panels"], 1) if p.get("on")]
         self.log(f"開始 [版 {VERSION}] ({'テスト: 購入の直前で止めます' if self.mode == 'test' else '本番: 購入まで行います'})"
-                 f"・1点{self.s['stake']}円・1日の上限{self.s['cap']:,}円")
+                 f"・全体の1日の上限{self.s['cap']:,}円" + (f"・1か月の上限{self.s['month_cap']:,}円" if self.s.get("month_cap") else "")
+                 + f"・投票パネル {'、'.join(str(i) for i, _ in on) or 'なし'}")
         for k, label in (("memberNo", "加入者番号"), ("pin", "暗証番号"), ("authPassword", "認証用パスワード"), ("betPassword", "投票用パスワード")):
             if not store.get_secret(k):
                 raise BotError(f"{label}が設定されていません (設定で保存してください)")
@@ -314,31 +413,18 @@ class Run:
             rows = fetch_predictions(self.date).get("rows", [])
         except Exception as e:
             raise BotError(f"今日 ({self.date}) の予想が読めませんでした: {e}")
-        allp = picks(rows, self.s)
-        if self.only is not None:
-            gone = len(self.only - {x["key"] for x in allp})
-            allp = [x for x in allp if x["key"] in self.only]
-            self.log(f"確認した買い目 {len(self.only)}点だけを買います" + (f" (予想から消えた {gone}点は買いません)" if gone else ""))
-        self.log(f"選び方: {STRATEGIES.get(self.s.get('strategy', 'value'))}")
         state = store.load_state(self.date)
-        p = plan(allp, self.s, state)
-        if self.s.get("strategy") == "value":
-            self.s["stake"] = p["stake"]
-            self.log(f"回収率重視: 締切{VALUE_FROM}以降のレースから期待値の上位{VALUE_POINTS}点を1点{p['stake']:,}円 (設定の1点の金額)")
-            if p["note"]:
-                self.log(p["note"])
-        if self.s.get("strategy") == "site":
-            self.s["stake"] = p["stake"]  # サイトの予算から決まる1点の金額
-            self.log(f"サイトの設定: 期待値{self.s['site_ev']}以上・1着確率{round(self.s['site_prob'] * 100)}%以上・"
-                     f"予算 {self.s['site_budget'] and format(self.s['site_budget'], ',') + '円' or '決めない'}・"
-                     f"点数 {self.s['site_points'] or '決めない'}・締切 {self.s.get('site_from') or '決めない'}{'以降' if self.s.get('site_from') else ''} → 1点{p['stake']:,}円")
-            if p["note"]:
-                self.log(p["note"])
-        if self.only_stake is not None and self.only_stake != self.s["stake"]:
-            raise BotError(f"1点の金額が確認したとき ({self.only_stake:,}円) と今 ({self.s['stake']:,}円) で違うので止めます。もう一度確認してください")
-        self.log(f"今日の買い目 {len(allp)}点・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
-                 f"買った {len(p['bought'])}点 ({state.get('spent', 0):,}円)")
-        if not p["want"]:
+        pl = self.make_plan(rows, state)
+        if self.only is not None:
+            gone = len(set(self.only) - {item_id(x) for x in pl["items"]})
+            self.log(f"確認した買い目 {len(self.only)}点だけを買います" + (f" (締切が近い・予想から消えたなどで {gone}点は買いません)" if gone else ""))
+        for p in pl["panels"]:
+            if not p["on"]:
+                continue
+            self.log(f"{p['name']}: {p['strategy']}・1点{p['stake']:,}円・買える {len(p['want'])}点・締切済み {len(p['closed'])}点・"
+                     f"今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""))
+        self.log(f"全体: 今日の残りの上限 {pl['room']:,}円・今日買った {state.get('spent', 0):,}円")
+        if not pl["items"]:
             self.log("買う買い目がありません")
             return
 
@@ -351,22 +437,29 @@ class Run:
             self.shot("01_top")
             bal = self.balance()
             self.log(f"購入限度額 (残高) {bal:,}円")
-            p = plan(allp, self.s, state, bal)
-            need = len(p["want"]) * self.s["stake"]
+            pl = self.make_plan(rows, state, bal)
+            need = sum(x["stake"] for x in pl["items"])
             if bal < need:
                 if self.mode != "live" or not self.s.get("deposit", True):
                     self.log(f"残高が {need - bal:,}円 足りません ({'テストなので入金しません' if self.mode != 'live' else '自動入金がオフ'})")
                     if self.mode != "live":
-                        p["buy"] = p["want"]  # テストは残高に関係なく入れてみる
+                        pl["buy"] = pl["items"]  # テストは残高に関係なく入れてみる
                 else:
                     self.deposit_for(need, bal, state)
                     bal = self.balance()
-                    p = plan(allp, self.s, state, bal)
-            if not p["buy"]:
+                    pl = self.make_plan(rows, state, bal)
+            if not pl["buy"]:
                 self.log("残高が無いので買いません")
                 return
-            buy = sorted(p["buy"], key=lambda x: -x.get("score", x["ev"]))  # 選び方の値の高い順
-            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R-{x['boat']}({x.get('score', x['ev']):.2f})" for x in buy))
+            # 同じ舟券を2つのパネルで買うときは、1点にまとめて金額を足す (記録はパネルごと)
+            groups = {}
+            for x in pl["buy"]:
+                g = groups.setdefault(x["key"], dict(x, stake=0, parts=[]))
+                g["stake"] += x["stake"]
+                g["parts"].append(x)
+            buy = sorted(groups.values(), key=lambda x: (min(p["panel"] for p in x["parts"]), -x.get("score", x["ev"])))
+            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R-{x['boat']} {x['stake']:,}円"
+                                            f"(パネル{'・'.join(str(p['panel']) for p in x['parts'])})" for x in buy))
             self.step = "投票画面"
             first = buy[0]
             self.click(f"#jyo{first['jcd']} a", f"開催一覧の{first['venue']}")
@@ -377,7 +470,7 @@ class Run:
                 try:
                     self.with_retry(self.add_bet, x)
                     added.append(x)
-                    self.log(f"ベットリストに入れました {x['venue']}{x['rno']}R 単勝{x['boat']} {self.s['stake']}円")
+                    self.log(f"ベットリストに入れました {x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円")
                 except BotError as e:
                     self.log(f"入れられませんでした {x['venue']}{x['rno']}R 単勝{x['boat']}: {e}")
                     self.close_popups()
@@ -386,13 +479,14 @@ class Run:
                 raise BotError("ベットリストに1点も入りませんでした")
             count, total = self.bet_count(), self.total_amount()
             self.log(f"ベットリスト {count}点・合計 {total:,}円")
-            if total != len(added) * self.s["stake"]:
-                raise BotError(f"合計 {total:,}円 が入れた分 ({len(added) * self.s['stake']:,}円) と合わないので止めます")
-            if total > p["room"]:
-                raise BotError(f"合計 {total:,}円 が今日の残りの上限 {p['room']:,}円 を超えるので止めます")
+            want_total = sum(x["stake"] for x in added)
+            if total != want_total:
+                raise BotError(f"合計 {total:,}円 が入れた分 ({want_total:,}円) と合わないので止めます")
+            if total > pl["room"]:
+                raise BotError(f"合計 {total:,}円 が今日の残りの上限 {pl['room']:,}円 を超えるので止めます")
             self.step = "投票入力完了"
             self.click("#betList .btnSubmit a", "「投票入力完了」")
-            self.confirm(added, total, state)
+            self.confirm(added, total, state, pl["room"])
         finally:
             try:
                 browser.close()
@@ -556,7 +650,7 @@ class Run:
         if "miss" in (btn.get_attribute("class") or ""):
             raise BotError("欠場のため入れられません")
         self.click(f"#regbtn_{x['boat']}_1 a", f"{x['boat']}号艇のボタン")
-        self.type_in("#amount", self.s["stake"] // 100, "金額 (100円単位)")
+        self.type_in("#amount", x["stake"] // 100, "金額 (100円単位)")
         self.wait_until(lambda: "off" not in (self.page.locator("#regAmountBtn").first.get_attribute("class") or ""),
                         "「ベットリストに追加」が押せません", 10)
         self.click("#regAmountBtn a", "「ベットリストに追加」")
@@ -647,7 +741,7 @@ class Run:
         except Exception as e:
             self.log(f"(画面の HTML を残せませんでした: {e})")
 
-    def confirm(self, added, total, state):
+    def confirm(self, added, total, state, room):
         self.step = "購入確認"
         self.wait_until(lambda: "/betconf" in self.page.url or self.is_vis("input[type=password]"), "購入確認画面が開きません", 30)
         self.wait(2)
@@ -698,7 +792,7 @@ class Run:
         if not btn:
             raise BotError("「投票する」ボタンが見つかりません")
         # 上限の最後の確かめ
-        if state.get("spent", 0) + total > self.s["cap"]:
+        if state.get("spent", 0) + total > self.s["cap"] or total > room:
             raise BotError("今日の上限を超えるので止めます")
         self.log(f"{len(added)}点・{total:,}円 を購入します")
         self.click(f"#{btn}", "「投票する」")
@@ -715,8 +809,9 @@ class Run:
             at = dt.datetime.now().strftime("%H:%M")
             state.setdefault("tickets", []).extend(
                 {"key": x["key"], "race_id": x["race_id"], "venue": x["venue"], "rno": x["rno"], "boat": x["boat"],
-                 "deadline": x["deadline"], "stake": self.s["stake"], "prob": x.get("prob"), "odds": x.get("odds"),
-                 "ev": x.get("ev"), "strategy": self.s.get("strategy", "model"), "at": at} for x in added)
+                 "deadline": x["deadline"], "stake": x["stake"], "prob": x.get("prob"), "odds": x.get("odds"),
+                 "ev": x.get("ev"), "panel": x["panel"], "strategy": self.s["panels"][x["panel"] - 1].get("strategy", "value"),
+                 "at": at} for g in added for x in g["parts"])
             store.save_state(state, self.date)
             self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
 
