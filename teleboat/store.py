@@ -35,12 +35,14 @@ DEFAULTS = {
 }
 
 PANELS = 3  # 投票パネルの数
+VALUE_POINTS = 3
 # 投票パネルごとの設定 (settings.json の "panels" に3つ並べる)
 PANEL_DEFAULTS = {
     "name": "",            # パネルの名前 (空なら「投票パネルN」)
     "on": False,           # この投票パネルで買う
-    "stake": 100,          # 1点の金額 (円)
-    "cap": 1000,           # このパネルの1日の上限 (円)
+    "budget": 1000,        # 1回の投票で使う金額 (円)。点数の舟券に振り分ける
+    "points": 3,           # 1回に買う最大の点数
+    "weighted": True,      # 期待値が高い舟券ほど多く振り分ける (False = 均等)
     "month_max": 0,        # このパネルの1か月の上限 (円)。0 = 決めない
     # 買う舟券の選び方 (単勝)
     #   value = 回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点)
@@ -143,7 +145,10 @@ def _panels(d):
     out = []
     for i in range(PANELS):
         p = raw[i] if i < len(raw) and isinstance(raw[i], dict) else {}
-        out.append({k: p.get(k, v) for k, v in PANEL_DEFAULTS.items()})
+        q = {k: p.get(k, v) for k, v in PANEL_DEFAULTS.items()}
+        if "budget" not in p:  # 前の版 (1点の金額と1日の上限) から: 1点の金額 × 3点、1日の上限を超えない
+            q["budget"] = max(100, min(int(p.get("stake", 100)) * VALUE_POINTS, int(p.get("cap", 1000))))
+        out.append(q)
     return out
 
 
@@ -161,7 +166,8 @@ def load_settings():
     out = {k: d.get(k, v) for k, v in DEFAULTS.items()}
     out["panels"] = _panels(d)
     # 1日に入金・購入する上限 = オンの投票パネルの1日の上限の合計 (全体の上限は無い)
-    out["cap"] = sum(p["cap"] for p in out["panels"] if p["on"])
+    # (前の版の1日の上限の代わり。「月の予算」のパネルは月の予算を入れる。実際の入金は足りない分だけ)
+    out["cap"] = sum(p["month_budget"] if p["strategy"] == "month" else p["budget"] for p in out["panels"] if p["on"])
     out["token"] = d["token"]
     out["secrets_set"] = {k: bool(d.get("secret_" + k)) for k in SECRET_KEYS}
     out["panel_pw_set"] = bool(d.get("panel_pw"))
@@ -217,10 +223,10 @@ def _check_panel(p, i):
     import re
     name = f"投票パネル{i}"
     p["name"] = str(p.get("name") or "").strip()[:20]
-    if p["stake"] < 100 or p["stake"] % 100:
-        raise ValueError(f"{name}: 1点の金額は100円単位にしてください")
-    if p["cap"] < 100 or p["cap"] % 100:
-        raise ValueError(f"{name}: 1日の上限は100円単位にしてください")
+    if p["budget"] < 100 or p["budget"] % 100:
+        raise ValueError(f"{name}: 1回の投票で使う金額は100円以上・100円単位にしてください")
+    if not 1 <= p["points"] <= 20:
+        raise ValueError(f"{name}: 点数は1〜20にしてください")
     if p["strategy"] not in STRATEGY_KEYS:
         p["strategy"] = "value"
     if not 1 <= p["per_race"] <= 6:

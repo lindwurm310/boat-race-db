@@ -9,6 +9,7 @@ import datetime as dt
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -42,27 +43,39 @@ class App:
         self.stop = threading.Event()
         self.current = None
         self.last = {}          # 最後の実行の結果
-        self.shot_at = 0
+        self.shot_at = {}       # パネルの番号 (0 = 全部) → 最後に画面写真を撮った時刻
+        self.run_panels = None  # 実行中のときのオンの投票パネル
         self.check_cache = {}
         self.fix_1117()
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(store.SHOTS, exist_ok=True)
         self.load_today_log()
 
+    TAG = re.compile(r"^(\S+ \S+) \[パネル([\d・]+)\] ")
+
     def load_today_log(self):
         try:
             with open(os.path.join(LOG_DIR, f"{store.today()}.log"), encoding="utf-8") as f:
                 for line in f.read().splitlines()[-1000:]:
-                    self.lines.append(line)
+                    m = self.TAG.match(line)
+                    tag = tuple(int(x) for x in m.group(2).split("・")) if m else None
+                    self.lines.append((tag, line))
         except OSError:
             pass
 
-    def log(self, msg):
-        line = f"{dt.datetime.now():%m/%d %H:%M:%S} {msg}"
+    def panels_for(self, panels):
+        """ログ・画面写真がどの投票パネルのものか。決めていなければ、実行中はその実行のパネル全部、それ以外は全部のパネル"""
+        if panels:
+            return tuple(sorted(panels))
+        return tuple(self.run_panels) if self.run_panels and self.running() else None
+
+    def log(self, msg, panels=None):
+        tag = self.panels_for(panels)
+        line = f"{dt.datetime.now():%m/%d %H:%M:%S} " + (f"[パネル{'・'.join(map(str, tag))}] " if tag else "") + msg
         if sys.stdout:  # pythonw で動かすときは画面が無い
             print(line, flush=True)
         with self.lock:
-            self.lines.append(line)
+            self.lines.append((tag, line))
         for d in (LOG_DIR, debug_dir()):
             if not d:
                 continue
@@ -73,7 +86,7 @@ class App:
             except OSError:
                 pass
 
-    def shot(self, page, name, html=None):
+    def shot(self, page, name, html=None, panels=None):
         stamp = dt.datetime.now().strftime("%H%M%S")
         dd = debug_dir()
         if html is not None:
@@ -86,14 +99,17 @@ class App:
         if page is None:
             return
         png = page.screenshot(full_page=False)
-        with open(os.path.join(store.SHOTS, "latest.png"), "wb") as f:
-            f.write(png)
+        tag = self.panels_for(panels) or range(1, store.PANELS + 1)
+        now = time.time()
+        for i in (0, *tag):  # 0 = メイン (全部)、1〜3 = そのパネルの最新
+            with open(os.path.join(store.SHOTS, "latest.png" if i == 0 else f"latest_p{i}.png"), "wb") as f:
+                f.write(png)
+            self.shot_at[i] = now
         for d in (store.SHOTS, dd):
             if d:
                 os.makedirs(d, exist_ok=True)
                 with open(os.path.join(d, f"{store.today()}_{stamp}_{name}.png"), "wb") as f:
                     f.write(png)
-        self.shot_at = time.time()
 
     def running(self):
         return bool(self.thread and self.thread.is_alive())
@@ -131,8 +147,11 @@ class App:
         st = store.load_state()
         st["approval"] = ap
         store.save_state(st)
-        self.log(f"購入前の確認 ({why}): " + "、".join(f"[{x['panel']}]{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in rows) +
-                 f" ・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います")
+        for i in sorted({x["panel"] for x in rows}):
+            mine = [x for x in rows if x["panel"] == i]
+            self.log(f"購入前の確認 ({why}): " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in mine) +
+                     f" ・{sum(x['stake'] for x in mine):,}円", [i])
+        self.log(f"購入前の確認: 合計 {ap['total']:,}円。パネルで「購入する」を押すと買います", sorted({x["panel"] for x in rows}))
         return True, "買う舟券を出しました。確かめて「購入する」を押してください"
 
     def approve(self, aid):
@@ -158,6 +177,7 @@ class App:
         from playwright.sync_api import sync_playwright
         r = bot.Run(s, self.log, self.shot, self.stop, mode, only, month)
         self.current = r
+        self.run_panels = [i for i, p in enumerate(s["panels"], 1) if p.get("on")]
         t0 = time.time()
         self.last = {"start": dt.datetime.now().isoformat(timespec="seconds"), "mode": mode, "why": why, "result": "実行中"}
         self.log(f"===== 実行 ({why})")
@@ -181,12 +201,13 @@ class App:
             self.log(f"===== 終わり ({self.last['result']}・{self.last['sec']}秒)")
             self.current = None
 
-    def status(self):
+    def status(self, panel=None):
+        """panel を決めると、ログと画面写真はそのパネルの分 (と、どのパネルとも決めていない分)"""
         s = store.load_settings()
         st = store.load_state()
         s.pop("token", None)
         with self.lock:
-            lines = list(self.lines)[-400:]
+            lines = [ln for tag, ln in self.lines if not panel or not tag or panel in tag][-400:]
         today = store.today()
         tickets = store.day_tickets(st, today)
         month = self.month_ctx(s, payout=False)
@@ -196,10 +217,10 @@ class App:
             spent = sum(t.get("stake", 0) for t in mine)
             panels.append({"panel": i, "name": store.panel_name(p, i), "on": p["on"], "strategy": p["strategy"],
                            "today": spent, "today_n": len(mine), "month": month.get(i, {}).get("spent_before", 0) + spent,
-                           "cap": p["cap"], "month_max": p["month_max"]})
+                           "budget": p["budget"], "month_max": p["month_max"]})
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
-            "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at,
+            "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at.get(panel or 0, 0),
             "month_spent": month.get("total_before", 0) + st.get("spent", 0), "panels": panels,
             "version": bot.VERSION, "date": today, "now": dt.datetime.now().strftime("%H:%M:%S"),
         }
@@ -500,7 +521,7 @@ def make_handler(app):
                     with open(os.path.join(WEB, "index.html"), "rb") as f:
                         self.send(200, f.read(), "text/html; charset=utf-8", {"Set-Cookie": cookie} if cookie else None)
                 elif u.path == "/api/status":
-                    self.send(200, app.status())
+                    self.send(200, app.status(int(q.get("panel", ["0"])[0] or 0) or None))
                 elif u.path == "/api/results":
                     pn = int(q.get("panel", ["0"])[0] or 0) or None
                     self.send(200, app.results(pn))
@@ -512,7 +533,8 @@ def make_handler(app):
                 elif u.path == "/api/plan":
                     self.send(200, app.plan())
                 elif u.path == "/api/shot.png":
-                    p = os.path.join(store.SHOTS, "latest.png")
+                    pn = int(q.get("panel", ["0"])[0] or 0)
+                    p = os.path.join(store.SHOTS, f"latest_p{pn}.png" if 1 <= pn <= store.PANELS else "latest.png")
                     if not os.path.exists(p):
                         self.send(404, {"error": "まだ画面写真がありません"})
                         return

@@ -85,7 +85,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       <button class="live" id="runLive">本番実行（購入まで）</button>
       <button id="stop">停止</button>
     </div>
-    <p class="note">実行すると、オンの投票パネル全部の舟券を1回のログインでまとめて買います（上限は投票パネルごとの1日・1か月の上限）。</p>
+    <p class="note">実行すると、オンの投票パネル全部の舟券を1回のログインでまとめて買います（金額は投票パネルごとの「1回の投票で使う金額」を、期待値に合わせて振り分けます）。</p>
   </section>
 
   <section class="card" id="apBox" hidden style="border:2px solid var(--ng)">
@@ -126,16 +126,6 @@ select { max-width:100%; text-overflow:ellipsis; }
         <a class="btn" href="/api/export?fmt=xlsx">Excel で出力</a>
         <a class="btn" href="/api/export?fmt=csv">CSV で出力（スプレッドシート用）</a>
       </div>
-    </section>
-
-    <section class="card">
-      <h2>画面写真（最新）</h2>
-      <img id="shot" alt="まだありません">
-    </section>
-
-    <section class="card">
-      <h2>ログ</h2>
-      <div id="log"></div>
     </section>
 
     <section class="card">
@@ -182,7 +172,7 @@ select { max-width:100%; text-overflow:ellipsis; }
         <label>パネルの名前（空なら「投票パネルN」）<input id="p_name" maxlength="20"></label>
         <label style="grid-column:1/-1">買う舟券の選び方（単勝）
           <select id="p_strategy">
-            <option value="value">回収率重視（おすすめ）: 締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点（1点の金額は下のとおり）</option>
+            <option value="value">回収率重視（おすすめ）: 締切11:00以降・期待値1.1以上・1着確率10%以上の上位（点数・金額は下のとおり）</option>
             <option value="month">月の予算でやりくり: 1か月の投資金額を残りの日数で割って、その日の予算で回収率重視と同じ条件の上位を買う</option>
             <option value="site">サイトの設定（予想サイトの「おすすめ舟券」で決めた条件）</option>
             <option value="model">予想モデルの買い目（期待値1以上）</option>
@@ -190,8 +180,9 @@ select { max-width:100%; text-overflow:ellipsis; }
             <option value="roi">回収率（期待値）の高い順</option>
             <option value="long">高配当狙い（予想オッズの高い順）</option>
           </select></label>
-        <label data-for="value model hit roi long">1点の金額（円）<input id="p_stake" type="number" step="100" min="100" inputmode="numeric"></label>
-        <label>このパネルの1日の上限（円）<input id="p_cap" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label data-for="value model hit roi long site">1回の投票で使う金額（円）<input id="p_budget" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label data-for="value model hit roi long">1回に買う点数（最大）<input id="p_points" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
+        <label class="chk"><input id="p_weighted" type="checkbox"> 期待値が高い舟券ほど多く振り分ける（オフ = 均等）</label>
         <label>このパネルの1か月の上限（円・0 = 決めない）<input id="p_month_max" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1か月の投資金額（円）<input id="p_month_budget" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1日に買う最大の点数<input id="p_month_points" type="number" min="1" max="12" step="1" inputmode="numeric"></label>
@@ -203,7 +194,7 @@ select { max-width:100%; text-overflow:ellipsis; }
         <label data-for="model hit roi long">予想オッズがこれ以上<input id="p_min_odds" type="number" min="1" step="0.5" inputmode="decimal"></label>
       </div>
       <div data-for="month" class="note" id="monthHelp">
-        毎日の予算 = (1か月の投資金額 − 昨日までに使った分) ÷ 今日を入れた月の残りの日数（100円単位で切り捨て）。1点の金額 = 毎日の予算 ÷ 点数。
+        毎日の予算 = (1か月の投資金額 − 昨日までに使った分) ÷ 今日を入れた月の残りの日数（100円単位で切り捨て）。その日の予算を点数の舟券に振り分けます。
         候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1日・1か月の上限も守ります）。
       </div>
       <div class="row" style="margin-top:12px">
@@ -232,6 +223,16 @@ select { max-width:100%; text-overflow:ellipsis; }
         Excel のファイルは Google スプレッドシートでも開けます（ドライブに上げて開く、または「ファイル → インポート」）。</p>
     </section>
   </div>
+  <!-- 画面写真とログ (メインは全部、投票パネルはそのパネルの分) -->
+  <section class="card">
+    <h2 id="shotTitle">画面写真（最新）</h2>
+    <img id="shot" alt="まだありません">
+  </section>
+
+  <section class="card">
+    <h2 id="logTitle">ログ</h2>
+    <div id="log"></div>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -242,7 +243,7 @@ const pct = (v) => v == null ? "-" : Math.round(v * 100) + "%";
 const f2 = (v) => v == null ? "-" : (+v).toFixed(2);
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const STRAT = {value: "回収率重視", month: "月の予算でやりくり", site: "サイトの設定", model: "予想モデル", hit: "的中率の高い順", roi: "期待値の高い順", long: "高配当狙い"};
-let lastShot = 0, filled = false, stickBottom = true, S = null, tab = 0, pFilled = 0;
+let refreshTimer = null, shotTab = 0, lastShot = 0, filled = false, stickBottom = true, S = null, tab = 0, pFilled = 0;
 
 async function api(path, body) {
   const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-TB": "1"}, body: JSON.stringify(body)};
@@ -262,6 +263,9 @@ function showTab(i) {
   $("tab0").hidden = i !== 0;
   $("tabP").hidden = i === 0;
   $("title").textContent = i ? pname(i) : "テレボート自動投票";
+  $("shotTitle").textContent = i ? "このパネルの画面写真（最新）" : "画面写真（最新・全部のパネル）";
+  $("logTitle").textContent = i ? "このパネルのログ（ログイン・入金など共通の操作も出ます）" : "ログ（全部のパネル）";
+  $("log").textContent = "読み込み中…"; sched(50);
   if (i) {
     pFilled = 0; fillPanel();
     $("p_xlsx").href = `/api/export?panel=${i}&fmt=xlsx`;
@@ -271,9 +275,12 @@ function showTab(i) {
 }
 document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => showTab(+b.dataset.tab));
 
+function sched(ms) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, ms); }
 async function refresh() {
   let s;
-  try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません"; setTimeout(refresh, 6000); return; }
+  const forTab = tab;
+  try { s = await api("/api/status" + (forTab ? "?panel=" + forTab : "")); } catch (e) { $("state").textContent = "パソコンに繋がりません"; sched(6000); return; }
+  if (forTab !== tab) { sched(50); return; }  // 読んでいる間にタブを変えた
   S = s;
   $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
   $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
@@ -295,13 +302,17 @@ async function refresh() {
   });
   if (tab) $("title").textContent = pname(tab);
   $("pcards").innerHTML = s.panels.map((p) => `<div class="pcard" data-p="${p.panel}"><b>${esc(p.name)}</b> <span class="badge ${p.on ? "on" : ""}">${p.on ? "オン" : "オフ"}</span>` +
-    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)} / 上限 ${yen(p.cap)}（${p.today_n}点）</div><div class="s">今月 ${yen(p.month)}${p.month_max ? " / 上限 " + yen(p.month_max) : ""}</div></div>`).join("");
+    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)}（${p.today_n}点）・1回 ${p.strategy === "month" ? "月の予算から" : yen(p.budget)}</div><div class="s">今月 ${yen(p.month)}${p.month_max ? " / 上限 " + yen(p.month_max) : ""}</div></div>`).join("");
   document.querySelectorAll(".pcard").forEach((c) => c.onclick = () => showTab(+c.dataset.p));
   const log = $("log");
   stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = s.log.join("\n");
   if (stickBottom) log.scrollTop = log.scrollHeight;
-  if (s.shot_at && s.shot_at !== lastShot) { lastShot = s.shot_at; $("shot").src = "/api/shot.png?" + Date.now(); }
+  if (forTab !== shotTab) { shotTab = forTab; lastShot = -1; }
+  if (s.shot_at !== lastShot) {
+    lastShot = s.shot_at;
+    if (s.shot_at) $("shot").src = "/api/shot.png?panel=" + forTab + "&" + Date.now(); else $("shot").removeAttribute("src");
+  }
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $("s_" + k).textContent = st.secrets_set[k] ? "（保存済み）" : "（未設定）";
   $("s_panel").textContent = st.panel_pw_set ? "（設定済み）" : "（未設定）";
   if (!filled) {
@@ -312,7 +323,7 @@ async function refresh() {
   }
   if (tab && pFilled !== tab) fillPanel();
   showApproval(s.running ? null : s.today.approval);
-  setTimeout(refresh, s.running ? 2000 : 6000);
+  sched(s.running ? 2000 : 6000);
 }
 
 // ---- 投票パネルの設定 ----
@@ -326,7 +337,7 @@ function fillPanel() {
   pFilled = tab;
   const p = S.settings.panels[tab - 1];
   $("p_on").checked = p.on; $("p_name").value = p.name || ""; $("p_strategy").value = p.strategy;
-  $("p_stake").value = p.stake; $("p_cap").value = p.cap; $("p_month_max").value = p.month_max || 0; $("p_per_race").value = p.per_race || 1;
+  $("p_budget").value = p.budget; $("p_points").value = p.points; $("p_weighted").checked = p.weighted !== false; $("p_month_max").value = p.month_max || 0; $("p_per_race").value = p.per_race || 1;
   $("p_min_prob").value = Math.round((p.min_prob || 0) * 100); $("p_min_ev").value = p.min_ev ?? 1; $("p_min_odds").value = p.min_odds ?? 1;
   $("p_month_budget").value = p.month_budget; $("p_month_points").value = p.month_points; $("p_month_reinvest").checked = p.month_reinvest;
   $("siteSum").textContent = siteText(p);
@@ -337,7 +348,7 @@ function fillPanel() {
 $("p_save").onclick = async () => {
   const i = tab;
   const body = {panel: i, on: $("p_on").checked, name: $("p_name").value.trim(), strategy: $("p_strategy").value,
-    stake: +$("p_stake").value, cap: +$("p_cap").value, month_max: +$("p_month_max").value || 0, per_race: +$("p_per_race").value || 1,
+    budget: +$("p_budget").value, points: +$("p_points").value || 3, weighted: $("p_weighted").checked, month_max: +$("p_month_max").value || 0, per_race: +$("p_per_race").value || 1,
     min_prob: (+$("p_min_prob").value || 0) / 100, min_ev: +$("p_min_ev").value || 0, min_odds: +$("p_min_odds").value || 1,
     month_budget: +$("p_month_budget").value || 0, month_points: +$("p_month_points").value || 3, month_reinvest: $("p_month_reinvest").checked};
   try {
@@ -361,12 +372,12 @@ async function loadPlan() {
     const rows = p.items.filter((x) => !tab || x.panel === tab);
     const notes = panels.map((x) => {
       if (!x.on) return `${esc(x.name)}: オフ`;
-      return `${esc(x.name)}: ${esc(x.strategy || "")}・1点${(x.stake || 100).toLocaleString()}円・買う ${x.want.length}点・締切済み ${x.closed.length}点・今日買った ${x.bought.length}点` +
+      return `${esc(x.name)}: ${esc(x.strategy || "")}・今回 ${yen(x.total)}・買う ${x.want.length}点・締切済み ${x.closed.length}点・今日買った ${x.bought.length}点` +
         (x.dropped.length ? `・条件や上限で外した ${x.dropped.length}点` : "") + (x.note ? `（${esc(x.note)}）` : "");
     });
     const head = document.createElement("div");
     head.className = "msg";
-    head.innerHTML = notes.join("<br>") + (tab ? "" : `<br>合計: 今日の残りの上限 ${yen(p.room)}・買う合計 ${yen(rows.reduce((a, x) => a + x.stake, 0))}`);
+    head.innerHTML = notes.join("<br>") + (tab ? "" : `<br>合計: 今回使える金額 ${yen(p.room)}・買う合計 ${yen(rows.reduce((a, x) => a + x.stake, 0))}`);
     const t = document.createElement("div");
     t.className = "scroll";
     t.innerHTML = rows.length ? "<table><tr><th>締切</th>" + (tab ? "" : "<th>パネル</th>") + "<th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
@@ -380,7 +391,7 @@ let confirmOn = true;
 async function run(mode) {
   if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、オンの投票パネルの舟券を購入まで行います（投票パネルごとの上限まで）。よろしいですか？")) return;
   try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 }
 let apId = null;
 function showApproval(ap) {
@@ -397,11 +408,11 @@ function showApproval(ap) {
 $("apOk").onclick = async () => {
   if (!apId) return;
   try { const r = await api("/api/approve", {id: apId}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 };
 $("apNo").onclick = async () => {
   try { const r = await api("/api/reject", {}); say(r.message); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 };
 $("runTest").onclick = () => run("test");
 $("runLive").onclick = () => run("live");
@@ -478,7 +489,7 @@ $("newToken").onclick = async () => {
 };
 // 予想サイトの「おすすめ舟券」から開いたとき: #site=1&ev=1.1&prob=0.1&budget=3000&points=5 (投票パネル1に入れる)
 function siteText(o) {
-  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1点100円）"}・点数 ${o.site_points || "決めない"}・締切 ${o.site_from ? o.site_from + "以降" : "決めない"}`;
+  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1回の投票で使う金額）"}・点数 ${o.site_points || "決めない"}・締切 ${o.site_from ? o.site_from + "以降" : "決めない"}`;
 }
 async function fromSite() {
   let h = location.hash.slice(1);
@@ -500,7 +511,7 @@ async function fromSite() {
 if (location.search.includes("t=")) history.replaceState(null, "", "/");
 let t0 = 0;
 try { t0 = +(localStorage.getItem("tbTab") || 0); } catch (e) {}
-(async () => { await refreshOnce(); showTab([0, 1, 2, 3].includes(t0) ? t0 : 0); refresh(); fromSite(); })();
+(async () => { await refreshOnce(); showTab([0, 1, 2, 3].includes(t0) ? t0 : 0); fromSite(); })();
 window.addEventListener("hashchange", fromSite);  // パネルを開いたままサイトのボタンを押したとき
 </script>
 </body>
