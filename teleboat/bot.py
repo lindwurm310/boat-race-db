@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-22b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-23a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -280,14 +280,18 @@ class Run:
         self.mode = mode or settings["mode"]
         self.only = dict(only) if only is not None else None  # パネルで確かめた買い目 {"パネル:キー": 金額}。これ以外は買わない
         self.month = month or {}                              # 今月の使った分・払戻 (上限と「月の予算」の計算)
-        self.log = log            # log(str)
-        self.shot_cb = shot       # shot(page, name)
+        self.log_cb = log         # log(str, panels)
+        self.shot_cb = shot       # shot(page, name, html=None, panels=None)
+        self.ctx = None           # 今の操作がどの投票パネルのものか (None = この実行の全部のパネル)
         self.stop = stop_event
         self.page = None
         self.date = store.today()
         self.step = "準備中"
 
     # ---- 共通の操作 ----
+    def log(self, msg, panels=None):
+        self.log_cb(msg, panels or self.ctx)
+
     def check_stop(self):
         if self.stop.is_set():
             raise Stopped("停止しました")
@@ -306,7 +310,7 @@ class Run:
 
     def shot(self, name):
         try:
-            self.shot_cb(self.page, name)
+            self.shot_cb(self.page, name, panels=self.ctx)
         except Exception as e:  # 写真が撮れなくても続ける
             self.log(f"(画面写真を撮れませんでした: {e})")
 
@@ -430,7 +434,8 @@ class Run:
                 continue
             what = "、".join(f"{x['venue']}{x['rno']}R-{x['boat']} {x['stake']:,}円" for x in p["want"])
             self.log(f"{p['name']}: {p['strategy']}・今回使う {p['total']:,}円・買う {len(p['want'])}点 ({what})・"
-                     f"締切済み {len(p['closed'])}点・今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""))
+                     f"締切済み {len(p['closed'])}点・今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""),
+                     [p["panel"]])
         self.log(f"今回使える金額 (オンのパネルの合計) {pl['room']:,}円・今日買った {state.get('spent', 0):,}円")
         if not pl["items"]:
             self.log("買う買い目がありません")
@@ -475,6 +480,7 @@ class Run:
             added = []
             for x in buy:
                 self.check_stop()
+                self.ctx = sorted({p["panel"] for p in x["parts"]})  # この舟券を選んだパネルのログ・画面写真にする
                 try:
                     self.with_retry(self.add_bet, x)
                     added.append(x)
@@ -482,6 +488,8 @@ class Run:
                 except BotError as e:
                     self.log(f"入れられませんでした {x['venue']}{x['rno']}R 単勝{x['boat']}: {e}")
                     self.close_popups()
+                finally:
+                    self.ctx = None
             self.shot("10_betlist")
             if not added:
                 raise BotError("ベットリストに1点も入りませんでした")
@@ -822,6 +830,10 @@ class Run:
                  "at": at} for g in added for x in g["parts"])
             store.save_state(state, self.date)
             self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
+            for i in sorted({x["panel"] for g in added for x in g["parts"]}):
+                mine = [x for g in added for x in g["parts"] if x["panel"] == i]
+                self.log("このパネルの購入: " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in mine) +
+                         f" (合計 {sum(x['stake'] for x in mine):,}円)", [i])
 
         def finished():
             t = self.popup_text()

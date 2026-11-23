@@ -129,16 +129,6 @@ select { max-width:100%; text-overflow:ellipsis; }
     </section>
 
     <section class="card">
-      <h2>画面写真（最新）</h2>
-      <img id="shot" alt="まだありません">
-    </section>
-
-    <section class="card">
-      <h2>ログ</h2>
-      <div id="log"></div>
-    </section>
-
-    <section class="card">
       <details id="setBox">
         <summary>全体の設定</summary>
         <div class="grid2" style="margin-top:12px">
@@ -233,6 +223,16 @@ select { max-width:100%; text-overflow:ellipsis; }
         Excel のファイルは Google スプレッドシートでも開けます（ドライブに上げて開く、または「ファイル → インポート」）。</p>
     </section>
   </div>
+  <!-- 画面写真とログ (メインは全部、投票パネルはそのパネルの分) -->
+  <section class="card">
+    <h2 id="shotTitle">画面写真（最新）</h2>
+    <img id="shot" alt="まだありません">
+  </section>
+
+  <section class="card">
+    <h2 id="logTitle">ログ</h2>
+    <div id="log"></div>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -243,7 +243,7 @@ const pct = (v) => v == null ? "-" : Math.round(v * 100) + "%";
 const f2 = (v) => v == null ? "-" : (+v).toFixed(2);
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const STRAT = {value: "回収率重視", month: "月の予算でやりくり", site: "サイトの設定", model: "予想モデル", hit: "的中率の高い順", roi: "期待値の高い順", long: "高配当狙い"};
-let lastShot = 0, filled = false, stickBottom = true, S = null, tab = 0, pFilled = 0;
+let refreshTimer = null, shotTab = 0, lastShot = 0, filled = false, stickBottom = true, S = null, tab = 0, pFilled = 0;
 
 async function api(path, body) {
   const opt = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-TB": "1"}, body: JSON.stringify(body)};
@@ -263,6 +263,9 @@ function showTab(i) {
   $("tab0").hidden = i !== 0;
   $("tabP").hidden = i === 0;
   $("title").textContent = i ? pname(i) : "テレボート自動投票";
+  $("shotTitle").textContent = i ? "このパネルの画面写真（最新）" : "画面写真（最新・全部のパネル）";
+  $("logTitle").textContent = i ? "このパネルのログ（ログイン・入金など共通の操作も出ます）" : "ログ（全部のパネル）";
+  $("log").textContent = "読み込み中…"; sched(50);
   if (i) {
     pFilled = 0; fillPanel();
     $("p_xlsx").href = `/api/export?panel=${i}&fmt=xlsx`;
@@ -272,9 +275,12 @@ function showTab(i) {
 }
 document.querySelectorAll("#tabs button").forEach((b) => b.onclick = () => showTab(+b.dataset.tab));
 
+function sched(ms) { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, ms); }
 async function refresh() {
   let s;
-  try { s = await api("/api/status"); } catch (e) { $("state").textContent = "パソコンに繋がりません"; setTimeout(refresh, 6000); return; }
+  const forTab = tab;
+  try { s = await api("/api/status" + (forTab ? "?panel=" + forTab : "")); } catch (e) { $("state").textContent = "パソコンに繋がりません"; sched(6000); return; }
+  if (forTab !== tab) { sched(50); return; }  // 読んでいる間にタブを変えた
   S = s;
   $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
   $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
@@ -302,7 +308,11 @@ async function refresh() {
   stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = s.log.join("\n");
   if (stickBottom) log.scrollTop = log.scrollHeight;
-  if (s.shot_at && s.shot_at !== lastShot) { lastShot = s.shot_at; $("shot").src = "/api/shot.png?" + Date.now(); }
+  if (forTab !== shotTab) { shotTab = forTab; lastShot = -1; }
+  if (s.shot_at !== lastShot) {
+    lastShot = s.shot_at;
+    if (s.shot_at) $("shot").src = "/api/shot.png?panel=" + forTab + "&" + Date.now(); else $("shot").removeAttribute("src");
+  }
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) $("s_" + k).textContent = st.secrets_set[k] ? "（保存済み）" : "（未設定）";
   $("s_panel").textContent = st.panel_pw_set ? "（設定済み）" : "（未設定）";
   if (!filled) {
@@ -313,7 +323,7 @@ async function refresh() {
   }
   if (tab && pFilled !== tab) fillPanel();
   showApproval(s.running ? null : s.today.approval);
-  setTimeout(refresh, s.running ? 2000 : 6000);
+  sched(s.running ? 2000 : 6000);
 }
 
 // ---- 投票パネルの設定 ----
@@ -381,7 +391,7 @@ let confirmOn = true;
 async function run(mode) {
   if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、オンの投票パネルの舟券を購入まで行います（投票パネルごとの上限まで）。よろしいですか？")) return;
   try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 }
 let apId = null;
 function showApproval(ap) {
@@ -398,11 +408,11 @@ function showApproval(ap) {
 $("apOk").onclick = async () => {
   if (!apId) return;
   try { const r = await api("/api/approve", {id: apId}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 };
 $("apNo").onclick = async () => {
   try { const r = await api("/api/reject", {}); say(r.message); } catch (e) { say(e.message, true); }
-  setTimeout(refresh, 500);
+  sched(500);
 };
 $("runTest").onclick = () => run("test");
 $("runLive").onclick = () => run("live");
@@ -501,7 +511,7 @@ async function fromSite() {
 if (location.search.includes("t=")) history.replaceState(null, "", "/");
 let t0 = 0;
 try { t0 = +(localStorage.getItem("tbTab") || 0); } catch (e) {}
-(async () => { await refreshOnce(); showTab([0, 1, 2, 3].includes(t0) ? t0 : 0); refresh(); fromSite(); })();
+(async () => { await refreshOnce(); showTab([0, 1, 2, 3].includes(t0) ? t0 : 0); fromSite(); })();
 window.addEventListener("hashchange", fromSite);  // パネルを開いたままサイトのボタンを押したとき
 </script>
 </body>
