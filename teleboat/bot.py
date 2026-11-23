@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-23a"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-24a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -200,10 +200,9 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
         budget = max(0, day - spent)  # 月の予算は1日ごと。今日もう買った分は引く
         points = max(0, int(settings.get("month_points") or 3) - len(bought))
     elif strategy == "site":
-        sb, sp = int(settings.get("site_budget") or 0), int(settings.get("site_points") or 0)
-        if sb:  # サイトの予算は1日の予算
-            budget = max(0, sb - spent)
-        points = max(0, sp - len(bought)) if sp else len(by_ev)
+        # 金額はパネルの「1回の投票で使う金額」(サイトから来た予算はそこに入れる)。点数はサイトの点数
+        sp = int(settings.get("site_points") or 0)
+        points = sp if sp else len(by_ev)
     room = budget
     mmax = int(settings.get("month_max") or 0)
     if mmax:
