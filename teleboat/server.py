@@ -567,8 +567,8 @@ def make_handler(app):
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if u.path == "/api/run":
                     s = store.load_settings()
-                    if body.get("mode") == "live" and s.get("confirm", True):
-                        ok, msg = app.prepare("手動")  # 本番はまず買い目を出して確かめてもらう
+                    if body.get("mode") == "live":
+                        ok, msg = app.prepare("手動")  # 手で押した本番は、いつもまず買い目を出して確かめてもらう
                     else:
                         ok, msg = app.start(body.get("mode"))
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
@@ -583,6 +583,10 @@ def make_handler(app):
                     self.send(200, {"ok": True})
                 elif u.path == "/api/settings":
                     store.save_settings(body)
+                    st = store.load_state()
+                    if st.pop("approval", None):  # 設定を変えたら、前の設定で出した確認は使えないようにする
+                        store.save_state(st)
+                        app.log("設定を変えたので、出していた購入前の確認を取り消しました。もう一度「本番実行」を押してください")
                     app.log("設定を保存しました")
                     self.send(200, {"ok": True})
                 elif u.path == "/api/new_token":

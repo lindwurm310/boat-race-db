@@ -89,7 +89,7 @@ select { max-width:100%; text-overflow:ellipsis; }
   </section>
 
   <section class="card" id="apBox" hidden style="border:2px solid var(--ng)">
-    <h2 style="color:var(--ng)">購入前の確認</h2>
+    <h2 style="color:var(--ng)">この舟券を買います（購入前の確認）</h2>
     <div class="msg" id="apNote"></div>
     <div id="apRows" class="scroll"></div>
     <div class="row" style="margin-top:12px">
@@ -137,7 +137,7 @@ select { max-width:100%; text-overflow:ellipsis; }
             <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
           <label class="chk"><input id="autoIn" type="checkbox"> 毎日自動で実行する</label>
           <label class="chk"><input id="deposit_on" type="checkbox"> 残高が足りなければ不足分を入金する（本番のみ）</label>
-          <label class="chk"><input id="confirm_on" type="checkbox"> 本番で買う前に、買う舟券を出して確認する（毎日の自動実行も）</label>
+          <label class="chk"><input id="confirm_on" type="checkbox"> 毎日の自動実行が本番のとき、買う前に買う舟券を出して確認する（手で押した「本番実行」はいつも確認を出します）</label>
           <label class="chk"><input id="headless" type="checkbox"> Edge の画面を出さずに動かす</label>
         </div>
         <p class="msg">ログイン情報はこのパソコンの中にだけ暗号化して保存します。空のままの欄は今の値を使います。</p>
@@ -195,7 +195,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       </div>
       <div data-for="month" class="note" id="monthHelp">
         毎日の予算 = (1か月の投資金額 − 昨日までに使った分) ÷ 今日を入れた月の残りの日数（100円単位で切り捨て）。その日の予算を点数の舟券に振り分けます。
-        候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1日・1か月の上限も守ります）。
+        候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1か月の上限も守ります）。
       </div>
       <div class="row" style="margin-top:12px">
         <button class="primary" id="p_save">このパネルを保存</button>
@@ -389,7 +389,6 @@ async function loadPlan() {
 
 let confirmOn = true;
 async function run(mode) {
-  if (mode === "live" && !confirmOn && !confirm("本番で実行します。足りなければ入金し、オンの投票パネルの舟券を購入まで行います（投票パネルごとの上限まで）。よろしいですか？")) return;
   try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
   sched(500);
 }
@@ -399,7 +398,11 @@ function showApproval(ap) {
   if (!ap) { apId = null; return; }
   if (ap.id === apId) return;
   apId = ap.id;
-  $("apNote").textContent = `${ap.at} ${ap.why}: ${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円` + (ap.note ? `（${ap.note}）` : "");
+  const by = {};
+  for (const x of ap.rows) { const k = x.name || `投票パネル${x.panel || 1}`; by[k] = (by[k] || 0) + (x.stake || ap.stake || 0); }
+  const parts = Object.entries(by).map(([k, v]) => `${k} ${v.toLocaleString()}円`).join(" ＋ ");
+  $("apNote").textContent = `${ap.at} ${ap.why}: ${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円` +
+    (Object.keys(by).length > 1 ? `（${parts}。オンの投票パネルそれぞれの「1回の投票で使う金額」の合計です）` : "") + (ap.note ? `（${ap.note}）` : "");
   $("apRows").innerHTML = "<table><tr><th>締切</th><th>パネル</th><th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
     ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${esc(x.name || x.panel || 1)}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake || ap.stake)}</td><td class=n>${pct(x.prob)}</td>` +
       `<td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table>";
@@ -489,7 +492,7 @@ $("newToken").onclick = async () => {
 };
 // 予想サイトの「おすすめ舟券」から開いたとき: #site=1&ev=1.1&prob=0.1&budget=3000&points=5 (投票パネル1に入れる)
 function siteText(o) {
-  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・予算 ${o.site_budget ? o.site_budget.toLocaleString() + "円" : "決めない（1回の投票で使う金額）"}・点数 ${o.site_points || "決めない"}・締切 ${o.site_from ? o.site_from + "以降" : "決めない"}`;
+  return `期待値${o.site_ev}以上・1着確率${Math.round(o.site_prob * 100)}%以上・点数 ${o.site_points || "決めない"}・締切 ${o.site_from ? o.site_from + "以降" : "決めない"}`;
 }
 async function fromSite() {
   let h = location.hash.slice(1);
@@ -503,7 +506,8 @@ async function fromSite() {
     say("サイトから来た設定が読めませんでした", true); return;
   }
   o.site_budget = Math.floor(o.site_budget); o.site_points = Math.floor(o.site_points);
-  if (!confirm("予想サイトで決めた設定を、投票パネル1の選び方にしますか？\n\n" + siteText(o) + "\n\n投票パネル1の1日・1か月の上限（今の設定）は超えません。")) { say("サイトの設定は保存しませんでした"); return; }
+  if (o.site_budget >= 100) o.budget = Math.floor(o.site_budget / 100) * 100;  // サイトの予算 → 1回の投票で使う金額
+  if (!confirm("予想サイトで決めた設定を、投票パネル1の選び方にしますか？\n\n" + siteText(o) + (o.budget ? `\n1回の投票で使う金額: ${o.budget.toLocaleString()}円` : "") + "\n\n投票パネル1の1か月の上限（今の設定）は超えません。")) { say("サイトの設定は保存しませんでした"); return; }
   try { await api("/api/settings", o); say("サイトの設定を保存しました。投票パネル1の選び方は「サイトの設定」になりました"); await refreshOnce(); pFilled = 0; fillPanel(); loadPlan(); }
   catch (e) { say("保存できませんでした: " + e.message, true); }
 }
