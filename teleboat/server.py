@@ -45,6 +45,8 @@ class App:
         self.last = {}          # 最後の実行の結果
         self.shot_at = {}       # パネルの番号 (0 = 全部) → 最後に画面写真を撮った時刻
         self.run_panels = None  # 実行中のときのオンの投票パネル
+        self.queue = collections.deque()  # 順番待ちの実行 (パネルごと)
+        self.qlock = threading.RLock()
         self.check_cache = {}
         self.fix_1117()
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -114,64 +116,99 @@ class App:
     def running(self):
         return bool(self.thread and self.thread.is_alive())
 
-    def start(self, mode, why="手動", only=None):
-        if self.running():
-            return False, "すでに実行中です"
-        s = store.load_settings()
-        if mode not in ("test", "live"):
-            mode = s["mode"]
-        self.stop.clear()
-        month = self.month_ctx(s)
-        self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, month), daemon=True)
-        self.thread.start()
-        return True, "開始しました"
+    @staticmethod
+    def only_panels(s, panels):
+        """panels のパネルだけをオンにした設定 (入金の上限 cap は全部のパネルのまま)"""
+        if not panels:
+            return s
+        s = dict(s, panels=[dict(p, on=bool(p.get("on")) and i in panels) for i, p in enumerate(s["panels"], 1)])
+        return s
 
-    # ---- 購入前の確認 ----
-    # 本番で買う前に、今の設定で買う舟券を state["approval"] に置いてパネルに出す。
-    # 「購入する」を押すと、その買い目だけ (同じパネル・同じ金額で) 本番で買う。日が変わると消える
-    def prepare(self, why="手動"):
-        if self.running():
-            return False, "すでに実行中です"
-        p = self.plan()
-        if p.get("error"):
-            return False, p["error"]
-        rows = p["items"]
-        if not rows:
-            return False, "今買える買い目がありません"
-        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev", "panel", "stake")
-        names = {x["panel"]: x["name"] for x in p["panels"]}
-        notes = [f"{x['name']}: {x['note']}" for x in p["panels"] if x.get("note")]
-        ap = {"id": secrets.token_hex(6), "why": why, "at": dt.datetime.now().strftime("%H:%M"),
-              "total": sum(x["stake"] for x in rows), "note": " / ".join(notes),
-              "rows": [dict({k: x.get(k) for k in keep}, name=names.get(x["panel"], "")) for x in rows]}
+    def start(self, mode, why="手動", only=None, panels=None):
+        """1つのパネル (panels) の実行を始める。実行中なら順番待ちに入れて、前の実行が終わったら始める"""
+        with self.qlock:
+            if self.running():
+                self.queue.append((mode, why, only, panels))
+                return True, "前の実行が終わったら始めます (順番待ち)"
+            s = store.load_settings()
+            if mode not in ("test", "live"):
+                mode = s["panels"][panels[0] - 1]["mode"] if panels else "test"
+            s = self.only_panels(s, panels)
+            self.stop.clear()
+            month = self.month_ctx(s)
+            self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, month), daemon=True)
+            self.thread.start()
+            return True, "開始しました"
+
+    def on_panels(self, panels=None):
+        s = store.load_settings()
+        return [i for i, p in enumerate(s["panels"], 1) if p.get("on") and (not panels or i in panels)]
+
+    # ---- 購入前の確認 (パネルごと) ----
+    # 本番で買う前に、そのパネルが買う舟券を state["approvals"]["パネル番号"] に置いて画面に出す。
+    # 「購入する」を押すと、その買い目だけ (同じ金額で) そのパネルだけ本番で買う。日が変わると消える
+    def prepare(self, why="手動", panels=None):
+        s = store.load_settings()
+        try:
+            rows_all = bot.fetch_predictions(store.today()).get("rows", [])
+        except Exception as e:
+            return False, f"今日の予想が読めません: {e}"
         st = store.load_state()
-        st["approval"] = ap
+        st.pop("approval", None)  # 前の版の (全部のパネルで1つの) 確認
+        aps = st.setdefault("approvals", {})
+        made, empty = [], []
+        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev", "panel", "stake")
+        for i in self.on_panels(panels):
+            p = bot.plan_all(rows_all, self.only_panels(s, [i]), st, self.month_ctx(s))
+            pp = p["panels"][i - 1]
+            rows = p["items"]
+            if not rows:
+                empty.append(pp["name"])
+                self.log(f"購入前の確認 ({why}): 今買える買い目がありません" + (f" ({pp['note']})" if pp.get("note") else ""), [i])
+                continue
+            ap = {"id": secrets.token_hex(6), "panel": i, "name": pp["name"], "why": why, "at": dt.datetime.now().strftime("%H:%M"),
+                  "total": sum(x["stake"] for x in rows), "note": pp.get("note", ""),
+                  "rows": [dict({k: x.get(k) for k in keep}, name=pp["name"]) for x in rows]}
+            aps[str(i)] = ap
+            made.append(pp["name"])
+            self.log(f"購入前の確認 ({why}): この舟券を買います " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in rows) +
+                     f" ・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います", [i])
         store.save_state(st)
-        for i in sorted({x["panel"] for x in rows}):
-            mine = [x for x in rows if x["panel"] == i]
-            self.log(f"購入前の確認 ({why}): " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in mine) +
-                     f" ・{sum(x['stake'] for x in mine):,}円", [i])
-        self.log(f"購入前の確認: 合計 {ap['total']:,}円。パネルで「購入する」を押すと買います", sorted({x["panel"] for x in rows}))
-        return True, "買う舟券を出しました。確かめて「購入する」を押してください"
+        if not made:
+            return False, "今買える買い目がありません" + (f" ({'、'.join(empty)})" if empty else "")
+        return True, f"買う舟券を出しました ({'、'.join(made)})。確かめて「購入する」を押してください"
 
     def approve(self, aid):
         st = store.load_state()
-        ap = st.get("approval")
-        if not ap or ap.get("id") != aid:
+        aps = st.get("approvals") or {}
+        key = next((k for k, ap in aps.items() if ap.get("id") == aid), None)
+        if key is None:
             return False, "確認の内容が古くなっています。もう一度「本番実行」を押してください"
-        if self.running():
-            return False, "すでに実行中です"
+        ap = aps.pop(key)
+        store.save_state(st)
+        only = {f"{ap['panel']}:{x['key']}": x["stake"] for x in ap["rows"]}
+        return self.start("live", f"{ap['name']}・{ap['why']}・確認して購入", only, [ap["panel"]])
+
+    def reject(self, aid=None):
+        st = store.load_state()
+        aps = st.get("approvals") or {}
+        for k in [k for k, ap in aps.items() if not aid or ap.get("id") == aid]:
+            ap = aps.pop(k)
+            self.log("購入前の確認で「やめる」を押したので買いません", [ap["panel"]])
         st.pop("approval", None)
         store.save_state(st)
-        only = {f"{x.get('panel') or 1}:{x['key']}": x.get("stake") or ap.get("stake") for x in ap["rows"]}
-        return self.start("live", f"{ap['why']}・確認して購入", only)
-
-    def reject(self):
-        st = store.load_state()
-        if st.pop("approval", None):
-            store.save_state(st)
-            self.log("購入前の確認で「やめる」を押したので買いません")
         return True, "やめました"
+
+    def clear_approvals(self, panel=None):
+        """設定を変えたら、前の設定で出した確認は使えないようにする"""
+        st = store.load_state()
+        aps = st.get("approvals") or {}
+        gone = [k for k in aps if not panel or k == str(panel)]
+        for k in gone:
+            ap = aps.pop(k)
+            self.log("設定を変えたので、出していた購入前の確認を取り消しました。もう一度「本番実行」を押してください", [ap["panel"]])
+        if gone or st.pop("approval", None):
+            store.save_state(st)
 
     def _work(self, s, mode, why, only=None, month=None):
         from playwright.sync_api import sync_playwright
@@ -197,9 +234,23 @@ class App:
             self.log(traceback.format_exc()[-800:])
             self.last["result"] = f"エラー: {first}"
         finally:
+            self.last["panels"] = list(self.run_panels or [])
             self.last["sec"] = int(time.time() - t0)
             self.log(f"===== 終わり ({self.last['result']}・{self.last['sec']}秒)")
             self.current = None
+            threading.Thread(target=self.next_in_queue, daemon=True).start()
+
+    def next_in_queue(self):
+        time.sleep(3)  # テレボートを続けて開かないように少しあける
+        with self.qlock:
+            if self.running() or not self.queue:
+                return
+            if self.stop.is_set():  # 「停止」を押したら順番待ちも消す
+                self.log(f"停止したので、順番待ちの実行 {len(self.queue)}件 を取り消しました")
+                self.queue.clear()
+                return
+            mode, why, only, panels = self.queue.popleft()
+        self.start(mode, why, only, panels)
 
     def status(self, panel=None):
         """panel を決めると、ログと画面写真はそのパネルの分 (と、どのパネルとも決めていない分)"""
@@ -220,6 +271,7 @@ class App:
                            "budget": p["budget"], "month_max": p["month_max"]})
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
+            "run_panels": list(self.run_panels or []) if self.running() else [], "queue": len(self.queue),
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at.get(panel or 0, 0),
             "month_spent": month.get("total_before", 0) + st.get("spent", 0), "panels": panels,
             "version": bot.VERSION, "date": today, "now": dt.datetime.now().strftime("%H:%M:%S"),
@@ -376,22 +428,26 @@ class App:
         return name + ".csv", ("\ufeff" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8"
 
     def scheduler(self):
-        """毎日 auto_time に1回だけ実行する (パソコンが起きていれば、時刻を過ぎてから起きても 2 時間以内なら実行)"""
+        """パネルごとに、毎日 そのパネルの時刻に1回だけ実行する (時刻を過ぎてから起きても 2 時間以内なら実行)"""
         while True:
             try:
                 s = store.load_settings()
-                if s["auto"]:
-                    now = dt.datetime.now()
-                    h, m = map(int, s["auto_time"].split(":"))
+                now = dt.datetime.now()
+                for i, p in enumerate(s["panels"], 1):
+                    if not (p.get("on") and p.get("auto")):
+                        continue
+                    h, m = map(int, p["auto_time"].split(":"))
                     at = now.replace(hour=h, minute=m, second=0, microsecond=0)
                     st = store.load_state()
-                    if at <= now < at + dt.timedelta(hours=2) and not st.get("auto_ran") and not self.running():
-                        st["auto_ran"] = True
+                    ran = st.setdefault("auto_ran_p", {})
+                    if at <= now < at + dt.timedelta(hours=2) and not ran.get(str(i)):
+                        ran[str(i)] = True
                         store.save_state(st)
-                        if s["mode"] == "live" and s.get("confirm", True):
-                            self.prepare("毎日の自動実行")  # 本番は買い目を出して「購入する」を待つ
+                        why = f"{store.panel_name(p, i)}の毎日の自動実行"
+                        if p["mode"] == "live" and s.get("confirm", True):
+                            self.prepare(why, [i])  # 本番は買い目を出して「購入する」を待つ
                         else:
-                            self.start(s["mode"], "毎日の自動実行")
+                            self.start(p["mode"], why, None, [i])
             except Exception as e:
                 self.log(f"自動実行の確認でエラー: {e}")
             time.sleep(20)
@@ -566,27 +622,30 @@ def make_handler(app):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if u.path == "/api/run":
-                    s = store.load_settings()
+                    pn = int(body.get("panel") or 0)
+                    panels = [pn] if pn else None
                     if body.get("mode") == "live":
-                        ok, msg = app.prepare("手動")  # 手で押した本番は、いつもまず買い目を出して確かめてもらう
-                    else:
-                        ok, msg = app.start(body.get("mode"))
+                        ok, msg = app.prepare("手動", panels)  # 手で押した本番は、いつもまず買い目を出して確かめてもらう
+                    else:  # テストは、パネルごとに順番に
+                        on = app.on_panels(panels)
+                        ok, msg = (False, "オンの投票パネルがありません") if not on else (True, "")
+                        for i in on:
+                            ok, msg = app.start("test", "手動", None, [i])
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
                 elif u.path == "/api/approve":
                     ok, msg = app.approve(str(body.get("id") or ""))
                     self.send(200 if ok else 409, {"ok": ok, "message": msg})
                 elif u.path == "/api/reject":
-                    ok, msg = app.reject()
+                    ok, msg = app.reject(str(body.get("id") or "") or None)
                     self.send(200, {"ok": ok, "message": msg})
                 elif u.path == "/api/stop":
                     app.stop.set()
+                    with app.qlock:
+                        app.queue.clear()
                     self.send(200, {"ok": True})
                 elif u.path == "/api/settings":
                     store.save_settings(body)
-                    st = store.load_state()
-                    if st.pop("approval", None):  # 設定を変えたら、前の設定で出した確認は使えないようにする
-                        store.save_state(st)
-                        app.log("設定を変えたので、出していた購入前の確認を取り消しました。もう一度「本番実行」を押してください")
+                    app.clear_approvals(int(body["panel"]) if "panel" in body else None)
                     app.log("設定を保存しました")
                     self.send(200, {"ok": True})
                 elif u.path == "/api/new_token":
@@ -610,6 +669,7 @@ def make_handler(app):
                 elif u.path == "/api/reset_today":
                     st = store.load_state()
                     st["auto_ran"] = False
+                    st["auto_ran_p"] = {}
                     store.save_state(st)
                     self.send(200, {"ok": True})
                 else:

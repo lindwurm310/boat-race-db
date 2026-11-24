@@ -85,19 +85,10 @@ select { max-width:100%; text-overflow:ellipsis; }
       <button class="live" id="runLive">本番実行（購入まで）</button>
       <button id="stop">停止</button>
     </div>
-    <p class="note">実行すると、オンの投票パネル全部の舟券を1回のログインでまとめて買います（金額は投票パネルごとの「1回の投票で使う金額」を、期待値に合わせて振り分けます）。</p>
+    <p class="note" id="runNote"></p>
   </section>
 
-  <section class="card" id="apBox" hidden style="border:2px solid var(--ng)">
-    <h2 style="color:var(--ng)">この舟券を買います（購入前の確認）</h2>
-    <div class="msg" id="apNote"></div>
-    <div id="apRows" class="scroll"></div>
-    <div class="row" style="margin-top:12px">
-      <button class="live" id="apOk">この舟券を購入する</button>
-      <button id="apNo">やめる</button>
-    </div>
-    <p class="note">「購入する」を押すまでは入金も購入もしません。押したときに締切まで3分を切った舟券は買いません。表にない舟券は買いません。</p>
-  </section>
+  <div id="apList" style="display:grid;gap:14px"></div>
 
   <!-- ===================== メイン ===================== -->
   <div id="tab0" style="display:grid;gap:14px">
@@ -107,7 +98,6 @@ select { max-width:100%; text-overflow:ellipsis; }
         <div><span>今日の合計</span><b id="spent">-</b></div>
         <div><span>今月の合計</span><b id="monthSpent">-</b></div>
         <div><span>今日の入金</span><b id="deposit">-</b></div>
-        <div><span>毎日の自動実行</span><b id="auto">-</b></div>
         <div><span>前回の結果</span><b id="last" style="font-size:14px">-</b></div>
       </div>
       <h2 style="margin-top:14px">投票パネル</h2>
@@ -132,10 +122,6 @@ select { max-width:100%; text-overflow:ellipsis; }
       <details id="setBox">
         <summary>全体の設定</summary>
         <div class="grid2" style="margin-top:12px">
-          <label>毎日の自動実行の時刻<input id="auto_time" type="time"></label>
-          <label>自動実行のときの動き
-            <select id="mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
-          <label class="chk"><input id="autoIn" type="checkbox"> 毎日自動で実行する</label>
           <label class="chk"><input id="deposit_on" type="checkbox"> 残高が足りなければ不足分を入金する（本番のみ）</label>
           <label class="chk"><input id="confirm_on" type="checkbox"> 毎日の自動実行が本番のとき、買う前に買う舟券を出して確認する（手で押した「本番実行」はいつも確認を出します）</label>
           <label class="chk"><input id="headless" type="checkbox"> Edge の画面を出さずに動かす</label>
@@ -184,6 +170,10 @@ select { max-width:100%; text-overflow:ellipsis; }
         <label data-for="value model hit roi long">1回に買う点数（最大）<input id="p_points" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
         <label class="chk"><input id="p_weighted" type="checkbox"> 期待値が高い舟券ほど多く振り分ける（オフ = 均等）</label>
         <label>このパネルの1か月の上限（円・0 = 決めない）<input id="p_month_max" type="number" step="100" min="0" inputmode="numeric"></label>
+        <label class="chk"><input id="p_auto" type="checkbox"> 毎日自動で実行する（このパネルだけで）</label>
+        <label>毎日の自動実行の時刻<input id="p_auto_time" type="time"></label>
+        <label>自動実行のときの動き
+          <select id="p_mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
         <label data-for="month">1か月の投資金額（円）<input id="p_month_budget" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1日に買う最大の点数<input id="p_month_points" type="number" min="1" max="12" step="1" inputmode="numeric"></label>
         <label data-for="month" class="chk"><input id="p_month_reinvest" type="checkbox"> 今月の払戻も予算に足す（答え合わせが出た分）</label>
@@ -283,17 +273,19 @@ async function refresh() {
   if (forTab !== tab) { sched(50); return; }  // 読んでいる間にタブを変えた
   S = s;
   $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
-  $("state").textContent = s.running ? `実行中: ${s.step}` : "待機中";
+  $("state").textContent = (s.running ? `実行中 (${s.run_panels.map(pname).join("・")}): ${s.step}` : "待機中") + (s.queue ? `・順番待ち ${s.queue}件` : "");
   $("modeBadge").textContent = s.running ? (s.last.mode === "live" ? "本番" : "テスト") : "";
   $("modeBadge").className = "badge " + (s.running ? (s.last.mode === "live" ? "live" : "test") : "");
-  $("runTest").disabled = $("runLive").disabled = s.running;
   $("stop").disabled = !s.running;
   const st = s.settings;
   confirmOn = st.confirm !== false;
   $("spent").textContent = yen(s.today.spent);
   $("deposit").textContent = yen(s.today.deposit);
   $("monthSpent").textContent = yen(s.month_spent);
-  $("auto").textContent = st.auto ? `${st.auto_time}（${st.mode === "live" ? "本番" : "テスト"}）` : "オフ";
+  $("runNote").textContent = tab ? `このパネル（${pname(tab)}）だけで実行します。ほかのパネルが実行中なら、終わってから順番に始めます。` :
+    "オンの投票パネルを、パネルごとに順番に実行します（ログイン・購入・記録はパネルごと）。本番は先にパネルごとに買う舟券を出します。";
+  $("runTest").textContent = tab ? "このパネルをテスト実行" : "全部のパネルをテスト実行";
+  $("runLive").textContent = tab ? "このパネルを本番実行" : "全部のパネルを本番実行";
   $("last").textContent = s.last.result ? `${s.last.start.slice(11, 16)} ${s.last.result}` : "-";
   document.querySelectorAll("#tabs button").forEach((b) => {
     const i = +b.dataset.tab; if (!i) return;
@@ -302,7 +294,8 @@ async function refresh() {
   });
   if (tab) $("title").textContent = pname(tab);
   $("pcards").innerHTML = s.panels.map((p) => `<div class="pcard" data-p="${p.panel}"><b>${esc(p.name)}</b> <span class="badge ${p.on ? "on" : ""}">${p.on ? "オン" : "オフ"}</span>` +
-    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)}（${p.today_n}点）・1回 ${p.strategy === "month" ? "月の予算から" : yen(p.budget)}</div><div class="s">今月 ${yen(p.month)}${p.month_max ? " / 上限 " + yen(p.month_max) : ""}</div></div>`).join("");
+    `<div class="s">${STRAT[p.strategy] || p.strategy}</div><div class="s">今日 ${yen(p.today)}（${p.today_n}点）・1回 ${p.strategy === "month" ? "月の予算から" : yen(p.budget)}</div><div class="s">今月 ${yen(p.month)}${p.month_max ? " / 上限 " + yen(p.month_max) : ""}</div>` +
+    `<div class="s">自動実行 ${st.panels[p.panel - 1].auto ? st.panels[p.panel - 1].auto_time + "（" + (st.panels[p.panel - 1].mode === "live" ? "本番" : "テスト") + "）" : "オフ"}</div></div>`).join("");
   document.querySelectorAll(".pcard").forEach((c) => c.onclick = () => showTab(+c.dataset.p));
   const log = $("log");
   stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
@@ -317,12 +310,11 @@ async function refresh() {
   $("s_panel").textContent = st.panel_pw_set ? "（設定済み）" : "（未設定）";
   if (!filled) {
     filled = true;
-    $("auto_time").value = st.auto_time; $("mode").value = st.mode;
-    $("autoIn").checked = st.auto; $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("headless").checked = st.headless;
+    $("deposit_on").checked = st.deposit; $("confirm_on").checked = st.confirm !== false; $("headless").checked = st.headless;
     if (!Object.values(st.secrets_set).every(Boolean)) $("setBox").open = true;
   }
   if (tab && pFilled !== tab) fillPanel();
-  showApproval(s.running ? null : s.today.approval);
+  showApprovals(s.today.approvals || {});
   sched(s.running ? 2000 : 6000);
 }
 
@@ -337,7 +329,7 @@ function fillPanel() {
   pFilled = tab;
   const p = S.settings.panels[tab - 1];
   $("p_on").checked = p.on; $("p_name").value = p.name || ""; $("p_strategy").value = p.strategy;
-  $("p_budget").value = p.budget; $("p_points").value = p.points; $("p_weighted").checked = p.weighted !== false; $("p_month_max").value = p.month_max || 0; $("p_per_race").value = p.per_race || 1;
+  $("p_budget").value = p.budget; $("p_points").value = p.points; $("p_weighted").checked = p.weighted !== false; $("p_month_max").value = p.month_max || 0; $("p_auto").checked = p.auto; $("p_auto_time").value = p.auto_time; $("p_mode").value = p.mode; $("p_per_race").value = p.per_race || 1;
   $("p_min_prob").value = Math.round((p.min_prob || 0) * 100); $("p_min_ev").value = p.min_ev ?? 1; $("p_min_odds").value = p.min_odds ?? 1;
   $("p_month_budget").value = p.month_budget; $("p_month_points").value = p.month_points; $("p_month_reinvest").checked = p.month_reinvest;
   $("siteSum").textContent = siteText(p);
@@ -348,7 +340,7 @@ function fillPanel() {
 $("p_save").onclick = async () => {
   const i = tab;
   const body = {panel: i, on: $("p_on").checked, name: $("p_name").value.trim(), strategy: $("p_strategy").value,
-    budget: +$("p_budget").value, points: +$("p_points").value || 3, weighted: $("p_weighted").checked, month_max: +$("p_month_max").value || 0, per_race: +$("p_per_race").value || 1,
+    budget: +$("p_budget").value, points: +$("p_points").value || 3, weighted: $("p_weighted").checked, month_max: +$("p_month_max").value || 0, auto: $("p_auto").checked, auto_time: $("p_auto_time").value || "09:30", mode: $("p_mode").value, per_race: +$("p_per_race").value || 1,
     min_prob: (+$("p_min_prob").value || 0) / 100, min_ev: +$("p_min_ev").value || 0, min_odds: +$("p_min_odds").value || 1,
     month_budget: +$("p_month_budget").value || 0, month_points: +$("p_month_points").value || 3, month_reinvest: $("p_month_reinvest").checked};
   try {
@@ -389,34 +381,33 @@ async function loadPlan() {
 
 let confirmOn = true;
 async function run(mode) {
-  try { const r = await api("/api/run", {mode}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
+  try { const r = await api("/api/run", {mode, panel: tab}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
   sched(500);
 }
-let apId = null;
-function showApproval(ap) {
-  $("apBox").hidden = !ap;
-  if (!ap) { apId = null; return; }
-  if (ap.id === apId) return;
-  apId = ap.id;
-  const by = {};
-  for (const x of ap.rows) { const k = x.name || `投票パネル${x.panel || 1}`; by[k] = (by[k] || 0) + (x.stake || ap.stake || 0); }
-  const parts = Object.entries(by).map(([k, v]) => `${k} ${v.toLocaleString()}円`).join(" ＋ ");
-  $("apNote").textContent = `${ap.at} ${ap.why}: ${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円` +
-    (Object.keys(by).length > 1 ? `（${parts}。オンの投票パネルそれぞれの「1回の投票で使う金額」の合計です）` : "") + (ap.note ? `（${ap.note}）` : "");
-  $("apRows").innerHTML = "<table><tr><th>締切</th><th>パネル</th><th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
-    ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${esc(x.name || x.panel || 1)}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake || ap.stake)}</td><td class=n>${pct(x.prob)}</td>` +
-      `<td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table>";
-  $("apBox").scrollIntoView({behavior: "smooth", block: "start"});
+let apKey = "";
+function showApprovals(aps) {
+  const list = Object.values(aps).filter((ap) => !tab || ap.panel === tab).sort((a, b) => a.panel - b.panel);
+  const key = list.map((ap) => ap.id).join(",") + "|" + tab;
+  if (key === apKey) return;
+  const fresh = list.some((ap) => !apKey.includes(ap.id));
+  apKey = key;
+  $("apList").replaceChildren(...list.map((ap) => {
+    const c = document.createElement("section");
+    c.className = "card"; c.style.border = "2px solid var(--ng)";
+    c.innerHTML = `<h2 style="color:var(--ng)">${esc(ap.name)}: この舟券を買います（購入前の確認）</h2>` +
+      `<div class="msg">${esc(ap.at)} ${esc(ap.why)}: ${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円${ap.note ? `（${esc(ap.note)}）` : ""}</div>` +
+      `<div class="scroll"><table><tr><th>締切</th><th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>` +
+      ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake)}</td><td class=n>${pct(x.prob)}</td>` +
+        `<td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table></div>" +
+      `<div class="row" style="margin-top:12px"><button class="live">${esc(ap.name)}のこの舟券を購入する</button><button>やめる</button></div>` +
+      `<p class="note">「購入する」を押すまでは入金も購入もしません。押したときに締切まで3分を切った舟券は買いません。ほかのパネルが実行中なら、終わってから買います。</p>`;
+    const [ok, no] = c.querySelectorAll("button");
+    ok.onclick = async () => { ok.disabled = true; try { const r = await api("/api/approve", {id: ap.id}); say(r.message, !r.ok); } catch (e) { say(e.message, true); } sched(300); };
+    no.onclick = async () => { try { const r = await api("/api/reject", {id: ap.id}); say(r.message); } catch (e) { say(e.message, true); } sched(300); };
+    return c;
+  }));
+  if (fresh && list.length) $("apList").scrollIntoView({behavior: "smooth", block: "start"});
 }
-$("apOk").onclick = async () => {
-  if (!apId) return;
-  try { const r = await api("/api/approve", {id: apId}); say(r.message, !r.ok); } catch (e) { say(e.message, true); }
-  sched(500);
-};
-$("apNo").onclick = async () => {
-  try { const r = await api("/api/reject", {}); say(r.message); } catch (e) { say(e.message, true); }
-  sched(500);
-};
 $("runTest").onclick = () => run("test");
 $("runLive").onclick = () => run("live");
 $("stop").onclick = async () => { await api("/api/stop", {}); say("停止を指示しました"); };
@@ -461,8 +452,7 @@ async function loadResults() {
 
 // ---- 全体の設定 ----
 $("save").onclick = async () => {
-  const body = {auto_time: $("auto_time").value, mode: $("mode").value,
-    auto: $("autoIn").checked, deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, headless: $("headless").checked};
+  const body = {deposit: $("deposit_on").checked, confirm: $("confirm_on").checked, headless: $("headless").checked};
   for (const k of ["memberNo", "pin", "authPassword", "betPassword"]) if ($(k).value.trim()) body[k] = $(k).value.trim();
   if ($("panel_password").value) body.panel_password = $("panel_password").value;
   try {
