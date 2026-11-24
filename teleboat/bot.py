@@ -1,4 +1,4 @@
-"""テレボート (ib.mbrace.or.jp) で、今日の予想の単勝買い目を買う。Playwright で Edge を動かす。
+"""テレボート (ib.mbrace.or.jp) で、今日の予想の買い目 (単勝・3連単・3連複) を買う。Playwright で Edge を動かす。
 
 流れ: ログイン → 開催一覧 → (足りなければ入金) → 投票画面で期待値の高い順にベットリストへ → 投票入力完了
       → 購入確認画面で金額・投票用パスワードを入れて「投票する」
@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-24b"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-24c"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -36,6 +36,10 @@ class Stopped(Exception):
 
 class BotError(Exception):
     pass
+
+
+class WrongBet(Exception):
+    """ベットリストに思ったのと違う舟券が入ったかもしれない。その回は買わずに止める"""
 
 
 # ---------------- 予想 → 買い目 ----------------
@@ -63,9 +67,9 @@ STRATEGIES = {
     "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
     "value": "回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上のうち、期待値の上位。点数・金額は設定のとおり)",
     "month": "月の予算でやりくり (1か月の予算を残りの日数で割った額で、回収率重視と同じ条件の上位を買う)",
-    "model": "予想モデルの買い目を期待値の高い順",
     "hit": "的中率の高い順 (各レースの本命)",
-    "roi": "回収率 (期待値) の高い順",
+    "tri": "3連単狙い (各艇の1着確率から出した3連単の確率が高いレース・組み合わせの順)",
+    "trio": "3連複狙い (各艇の1着確率から出した3連複の確率が高いレース・組み合わせの順)",
     "long": "高配当狙い (予想オッズが高い順)",
 }
 
@@ -78,11 +82,72 @@ def _num(v):
         return None
 
 
+BET_NAME = {"win": "単勝", "tri": "3連単", "trio": "3連複"}
+
+
+def tname(x):
+    """舟券の表記 (例: 単勝1、3連単1-4-3、3連複1=3=4)"""
+    return f"{BET_NAME.get(x.get('bet', 'win'), '単勝')}{x['boat']}"
+
+
+def order_probs(p):
+    """各艇の1着確率から、3連単の各組み合わせの確率を出す (1着を決めたら残りの艇の中で同じ比で2着・3着が決まるとする)"""
+    out = {}
+    for a in p:
+        for b in p:
+            for c in p:
+                if len({a, b, c}) < 3:
+                    continue
+                r1, r2 = 1 - p[a], 1 - p[a] - p[b]
+                if r1 <= 0 or r2 <= 0:
+                    continue
+                out[(a, b, c)] = p[a] * p[b] / r1 * p[c] / r2
+    return out
+
+
+def combo_picks(rows, s, kind):
+    """3連単 (tri)・3連複 (trio) の買い目。オッズが無いので期待値は使わず、確率の高い組み合わせを買う。
+    1レースの点数 (per_race) まで確率の高い順 (3連単は予想の「3連単上位5点」の順を先に) に選び、選んだ組み合わせの確率の合計が高いレースから並べる (同じレースの組み合わせはまとめて買う)。
+    本命の1着確率 (min_prob) より低いレースは買わない"""
+    per_race = int(s.get("per_race", 1) or 1)
+    min_prob = float(s.get("min_prob", 0) or 0)
+    out = []
+    for r in rows:
+        _, jcd, rno = r["race_id"].split("-")
+        p = {str(b): _num(r.get(f"{b}号艇")) for b in range(1, 7)}
+        p = {b: v for b, v in p.items() if v is not None and v > 0}
+        if len(p) < 3 or max(p.values()) < min_prob:
+            continue
+        tri = order_probs(p)
+        if kind == "trio":
+            pr = {}
+            for k, v in tri.items():
+                pr[tuple(sorted(k, key=int))] = pr.get(tuple(sorted(k, key=int)), 0) + v
+            sep = "="
+        else:
+            pr, sep = tri, "-"
+        ranked = sorted(pr.items(), key=lambda kv: -kv[1])
+        if kind == "tri":  # 予想モデルの「3連単上位5点」を先に (2着・3着の当て方はモデルのほうが良い)
+            model = [tuple(c.split("-")) for c in str(r.get("3連単上位5点") or "").split() if len(c.split("-")) == 3]
+            model = [k for k in model if k in pr]
+            ranked = [(k, pr[k]) for k in model] + [kv for kv in ranked if kv[0] not in model]
+        top = ranked[:per_race]
+        cover = sum(v for _, v in top)
+        for k, v in top:
+            combo = sep.join(k)
+            out.append({"key": f"{r['race_id']}-{kind}-{combo}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
+                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "bet": kind, "boat": combo,
+                        "prob": v, "odds": None, "ev": 0.0, "score": cover + v / 1000})
+    return sorted(out, key=lambda p: p["deadline"])
+
+
 def picks(rows, settings=None):
     """予想の行から、1点ずつの単勝の買い目を作る。settings の strategy で選び方を変える。
     各買い目: key, race_id, jcd, rno, venue, deadline, boat, prob (1着確率), odds (予想オッズ), ev (期待値), score (並べる値)"""
     s = settings or {}
     strategy = s.get("strategy", "value")
+    if strategy in ("tri", "trio"):
+        return combo_picks(rows, s, strategy)
     if strategy in ("value", "month"):  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
         # 過去5年の検証 (analysis/osusume/README.md) で、その日の上位3点×300円が回収率と安定のバランスが一番良かった
         strategy, min_prob, min_ev = "roi", 0.10, 1.1
@@ -127,7 +192,7 @@ def picks(rows, settings=None):
             chosen = ok
         for c in chosen[:per_race]:
             out.append({"key": f"{r['race_id']}-{c['boat']}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
-                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "boat": c["boat"],
+                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "bet": "win", "boat": c["boat"],
                         "prob": c.get("prob"), "odds": c.get("odds"), "ev": c.get("ev") or 0.0, "score": c.get("score") or 0.0})
     return sorted(out, key=lambda p: p["deadline"])
 
@@ -156,24 +221,43 @@ def month_budget_today(settings, month, date):
     return budget, why
 
 
-def allocate(cands, budget, weighted=True):
+def allocate(cands, budget, weighted=True, cap=0):
     """予算を舟券に振り分ける (100円単位・1点最低100円)。weighted なら期待値が高いほど多く。
-    重み = 期待値 − 0.9 (期待値1.1 → 0.2、1.5 → 0.6 で3倍)。返す: 金額のリスト (cands と同じ順)"""
+    重み = 期待値 − 0.9 (期待値1.1 → 0.2、1.5 → 0.6 で3倍)。
+    cap (円) を決めたら1点の金額はそれまで。超えた分はほかの舟券に回し、全部が上限なら残りは使わない。
+    返す: 金額のリスト (cands と同じ順)"""
     n = len(cands)
     units = budget // 100
+    cu = cap // 100 if cap else 0
+    if cu:
+        units = min(units, cu * n)
     if not n or units < n:
         return []
     if weighted:
         w = [max(0.05, float(c.get("ev") or 0) - 0.9) for c in cands]
     else:
         w = [1.0] * n
-    rest = units - n  # 1点100円ずつ配ったあとの残り
-    tw = sum(w)
-    raw = [rest * x / tw for x in w]
-    got = [1 + int(r) for r in raw]
-    left = units - sum(got)
-    for i in sorted(range(n), key=lambda i: -(raw[i] - int(raw[i])))[:left]:  # 端数は小数部の大きい順
-        got[i] += 1
+    got = [1] * n  # 1点100円ずつ配ってから、残りを重みで分ける
+    free = list(range(n))
+    while True:
+        rest = units - sum(got)
+        if rest <= 0 or not free:
+            break
+        tw = sum(w[i] for i in free)
+        raw = {i: rest * w[i] / tw for i in free}
+        add = {i: int(raw[i]) for i in free}
+        left = rest - sum(add.values())
+        for i in sorted(free, key=lambda i: -(raw[i] - int(raw[i])))[:left]:  # 端数は小数部の大きい順
+            add[i] += 1
+        over = False
+        for i in free:
+            got[i] += add[i]
+            if cu and got[i] > cu:
+                got[i] = cu
+                over = True
+        free = [i for i in free if not cu or got[i] < cu]
+        if not over:
+            break
     return [g * 100 for g in got]
 
 
@@ -197,6 +281,10 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
     if strategy == "month":
         day, why = month_budget_today(settings, month, date or now.date().isoformat())
         notes.append(why)
+        dmax = int(settings.get("month_day_max") or 0)
+        if dmax and day > dmax:
+            day = dmax
+            notes.append(f"1日あたりの上限 {dmax:,}円 にしました (残りは次の日からに回ります)")
         budget = max(0, day - spent)  # 月の予算は1日ごと。今日もう買った分は引く
         points = max(0, int(settings.get("month_points") or 3) - len(bought))
     elif strategy == "site":
@@ -216,7 +304,10 @@ def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, mo
     want, stakes = [], []
     if n:
         want = by_ev[:n]
-        stakes = allocate(want, room // 100 * 100, settings.get("weighted", True))
+        cap = int(settings.get("month_stake_max") or 0) if strategy == "month" else 0
+        stakes = allocate(want, room // 100 * 100, settings.get("weighted", True), cap)
+        if cap and sum(stakes) < room // 100 * 100:
+            notes.append(f"1点の上限 {cap:,}円 までなので {sum(stakes):,}円 だけ買います")
         want = [dict(x, stake=st) for x, st in zip(want, stakes)]
     elif by_ev and room < 100:
         notes.append("今回使える金額が100円未満なので買いません")
@@ -431,7 +522,7 @@ class Run:
         for p in pl["panels"]:
             if not p["on"]:
                 continue
-            what = "、".join(f"{x['venue']}{x['rno']}R-{x['boat']} {x['stake']:,}円" for x in p["want"])
+            what = "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円" for x in p["want"])
             self.log(f"{p['name']}: {p['strategy']}・今回使う {p['total']:,}円・買う {len(p['want'])}点 ({what})・"
                      f"締切済み {len(p['closed'])}点・今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""),
                      [p["panel"]])
@@ -470,7 +561,7 @@ class Run:
                 g["stake"] += x["stake"]
                 g["parts"].append(x)
             buy = sorted(groups.values(), key=lambda x: (min(p["panel"] for p in x["parts"]), -x.get("score", x["ev"])))
-            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R-{x['boat']} {x['stake']:,}円"
+            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円"
                                             f"(パネル{'・'.join(str(p['panel']) for p in x['parts'])})" for x in buy))
             self.step = "投票画面"
             first = buy[0]
@@ -483,9 +574,9 @@ class Run:
                 try:
                     self.with_retry(self.add_bet, x)
                     added.append(x)
-                    self.log(f"ベットリストに入れました {x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円")
+                    self.log(f"ベットリストに入れました {x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円")
                 except BotError as e:
-                    self.log(f"入れられませんでした {x['venue']}{x['rno']}R 単勝{x['boat']}: {e}")
+                    self.log(f"入れられませんでした {x['venue']}{x['rno']}R {tname(x)}: {e}")
                     self.close_popups()
                 finally:
                     self.ctx = None
@@ -658,18 +749,41 @@ class Run:
         before = self.bet_count()
         self.select_venue(x["jcd"], x["venue"])
         self.select_race(x["rno"])
-        self.select_tab("betkati1", "単勝")
+        bet = x.get("bet", "win")
+        tab, name = {"win": ("betkati1", "単勝"), "tri": ("betkati6", "3連単"), "trio": ("betkati7", "3連複")}[bet]
+        self.select_tab(tab, name)
         self.select_tab("betway1", "通常投票")
-        btn = self.page.locator(f"#regbtn_{x['boat']}_1").first
-        self.wait_until(lambda: btn.count() > 0, "艇の番号のボタンがありません", 10)
-        if "miss" in (btn.get_attribute("class") or ""):
-            raise BotError("欠場のため入れられません")
-        self.click(f"#regbtn_{x['boat']}_1 a", f"{x['boat']}号艇のボタン")
+        boats = re.findall(r"\d", str(x["boat"]))
+        if bet == "win":
+            spots = [(boats[0], 1)]
+        elif bet == "tri" or self.page.locator(f"#regbtn_{boats[1]}_2").count():
+            spots = list(zip(boats, (1, 2, 3)))  # 1着・2着・3着 (3連複も3段のときは 1艇目・2艇目・3艇目)
+        else:
+            spots = [(bt, 1) for bt in boats]  # 3連複で1段だけのときは3艇を選ぶ
+        for bt, row in spots:
+            btn = self.page.locator(f"#regbtn_{bt}_{row}").first
+            self.wait_until(lambda: btn.count() > 0, f"{name}の{bt}号艇 ({row}段目) のボタンがありません", 10)
+            if "miss" in (btn.get_attribute("class") or ""):
+                raise BotError("欠場のため入れられません")
+            self.click(f"#regbtn_{bt}_{row} a", f"{name}の{bt}号艇 ({row}段目) のボタン")
         self.type_in("#amount", x["stake"] // 100, "金額 (100円単位)")
         self.wait_until(lambda: "off" not in (self.page.locator("#regAmountBtn").first.get_attribute("class") or ""),
                         "「ベットリストに追加」が押せません", 10)
         self.click("#regAmountBtn a", "「ベットリストに追加」")
         self.wait_until(lambda: self.bet_count() > before, "ベットリストに入ったことを確かめられませんでした", 15)
+        if bet != "win":
+            # 3連単・3連複は、ベットリストに思った組み合わせが入ったかを確かめる。違えば買わずに止める
+            import unicodedata
+            try:
+                text = unicodedata.normalize("NFKC", self.page.locator("#betList").first.inner_text(timeout=3000))
+            except Exception:
+                text = ""
+            pat = r"\D{0,3}".join(boats)
+            if name not in text or not re.search(pat, text):
+                self.shot("11_betlist_check")
+                self.save_html("11_betlist_check")
+                raise WrongBet(f"ベットリストに {name}{x['boat']} が見当たりません。違う舟券が入ったかもしれないので、買わずに止めます"
+                               f" (ベットリスト: {re.sub(chr(92) + 's+', ' ', text)[:120]})")
 
     def select_venue(self, jcd, venue):
         venue = JYO.get(jcd, venue)  # 画面の表記に合わせる
@@ -823,7 +937,7 @@ class Run:
             state["spent"] = state.get("spent", 0) + total
             at = dt.datetime.now().strftime("%H:%M")
             state.setdefault("tickets", []).extend(
-                {"key": x["key"], "race_id": x["race_id"], "venue": x["venue"], "rno": x["rno"], "boat": x["boat"],
+                {"key": x["key"], "race_id": x["race_id"], "venue": x["venue"], "rno": x["rno"], "bet": x.get("bet", "win"), "boat": x["boat"],
                  "deadline": x["deadline"], "stake": x["stake"], "prob": x.get("prob"), "odds": x.get("odds"),
                  "ev": x.get("ev"), "panel": x["panel"], "strategy": self.s["panels"][x["panel"] - 1].get("strategy", "value"),
                  "at": at} for g in added for x in g["parts"])
@@ -831,7 +945,7 @@ class Run:
             self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
             for i in sorted({x["panel"] for g in added for x in g["parts"]}):
                 mine = [x for g in added for x in g["parts"] if x["panel"] == i]
-                self.log("このパネルの購入: " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in mine) +
+                self.log("このパネルの購入: " + "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円" for x in mine) +
                          f" (合計 {sum(x['stake'] for x in mine):,}円)", [i])
 
         def finished():

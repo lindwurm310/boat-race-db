@@ -157,7 +157,7 @@ class App:
         st.pop("approval", None)  # 前の版の (全部のパネルで1つの) 確認
         aps = st.setdefault("approvals", {})
         made, empty = [], []
-        keep = ("key", "deadline", "venue", "rno", "boat", "prob", "odds", "ev", "panel", "stake")
+        keep = ("key", "deadline", "venue", "rno", "bet", "boat", "prob", "odds", "ev", "panel", "stake")
         for i in self.on_panels(panels):
             p = bot.plan_all(rows_all, self.only_panels(s, [i]), st, self.month_ctx(s))
             pp = p["panels"][i - 1]
@@ -171,7 +171,7 @@ class App:
                   "rows": [dict({k: x.get(k) for k in keep}, name=pp["name"]) for x in rows]}
             aps[str(i)] = ap
             made.append(pp["name"])
-            self.log(f"購入前の確認 ({why}): この舟券を買います " + "、".join(f"{x['venue']}{x['rno']}R 単勝{x['boat']} {x['stake']:,}円" for x in rows) +
+            self.log(f"購入前の確認 ({why}): この舟券を買います " + "、".join(f"{x['venue']}{x['rno']}R {bot.tname(x)} {x['stake']:,}円" for x in rows) +
                      f" ・合計 {ap['total']:,}円。パネルで「購入する」を押すと買います", [i])
         store.save_state(st)
         if not made:
@@ -225,7 +225,7 @@ class App:
         except bot.Stopped as e:
             self.log(str(e))
             self.last["result"] = "停止"
-        except bot.BotError as e:
+        except (bot.BotError, bot.WrongBet) as e:
             self.log(f"止めました ({r.step}): {e}")
             self.last["result"] = f"エラー: {e}"
         except Exception as e:
@@ -322,7 +322,9 @@ class App:
 
     def settle(self, date, tickets):
         """舟券ごとに 結果・払戻 を入れる"""
-        res = {r["race_id"]: r for r in (self.check(date) or {}).get("rows", [])}
+        chk = self.check(date) or {}
+        res = {r["race_id"]: r for r in chk.get("rows", [])}
+        trio_pay = {k["race_id"]: k.get("3連複配当") for k in chk.get("kaime") or []}
         out = []
         for t in sorted(tickets, key=lambda t: t.get("deadline") or ""):
             t = dict(t)
@@ -335,15 +337,23 @@ class App:
             if not r or not first:
                 t["result"] = "結果待ち"
             else:
-                win = first == str(t["boat"])
+                bet = t.get("bet", "win")
+                got = str(r.get("結果") or "").split("-")
+                mine = re.findall(r"\d", str(t["boat"]))
+                if bet == "tri":
+                    win, pay = got == mine, r.get("三連単配当")
+                elif bet == "trio":
+                    win, pay = sorted(got) == sorted(mine), trio_pay.get(t["race_id"])
+                else:
+                    win, pay = first == str(t["boat"]), r.get("単勝配当")
                 t["win"] = win
                 t["finish"] = r.get("結果")
-                if win and r.get("単勝配当") is None:  # 配当がまだ入っていない
+                if win and pay is None:  # 配当がまだ入っていない
                     t["result"] = "的中 (配当待ち)"
                 else:
                     t["result"] = "的中" if win else f"外れ ({r.get('結果')})"
-                    t["odds_paid"] = r.get("単勝配当") if win else None
-                    t["payout"] = int(r["単勝配当"] * t["stake"] / 100) if win else 0
+                    t["odds_paid"] = pay if win else None
+                    t["payout"] = int(pay * t["stake"] / 100) if win else 0
                     t["settled"] = True
             out.append(t)
         return out
@@ -395,13 +405,14 @@ class App:
     def export(self, panel=None, fmt="csv"):
         """収支の記録を表にする (Excel・Google スプレッドシートで開ける)。返す: (ファイル名, 中身, Content-Type)"""
         r = self.results(panel, days=100000)
-        head = ["日付", "投票パネル", "選び方", "場", "R", "締切", "単勝", "金額", "1着確率", "予想オッズ", "期待値", "結果", "着順", "払戻", "収支", "買った時刻"]
+        head = ["日付", "投票パネル", "選び方", "場", "R", "締切", "券種", "買い目", "金額", "確率", "予想オッズ", "期待値", "結果", "着順", "払戻", "収支", "買った時刻"]
         rows = []
         for d in sorted(r["days"], key=lambda d: d["date"]):
             for t in d["tickets"]:
                 rows.append([d["date"], t.get("panel_name") or f"投票パネル{t['panel']}",
                              bot.STRATEGIES.get(t.get("strategy") or "", "").split(" (")[0], t.get("venue", ""), t.get("rno"),
-                             t.get("deadline", ""), int(t["boat"]), t["stake"],
+                             t.get("deadline", ""), bot.BET_NAME.get(t.get("bet", "win"), "単勝"),
+                             int(t["boat"]) if str(t["boat"]).isdigit() else str(t["boat"]), t["stake"],
                              None if t.get("prob") is None else round(t["prob"], 3),
                              None if t.get("odds") is None else round(t["odds"], 1),
                              None if t.get("ev") is None else round(t["ev"], 2),
