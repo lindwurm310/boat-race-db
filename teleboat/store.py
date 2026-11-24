@@ -44,6 +44,10 @@ PANEL_DEFAULTS = {
     "points": 3,           # 1回に買う最大の点数
     "weighted": True,      # 期待値が高い舟券ほど多く振り分ける (False = 均等)
     "month_max": 0,        # このパネルの1か月の上限 (円)。0 = 決めない
+    # 毎日の自動実行 (パネルごと。前の版の全体の設定を引き継ぐ)
+    "auto": True,          # 毎日 auto_time に、このパネルだけで実行する
+    "auto_time": "09:30",
+    "mode": "test",        # test = 購入の直前で止める / live = 購入まで行う
     # 買う舟券の選び方 (単勝)
     #   value = 回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点)
     #   month = 月の予算でやりくり (1か月の予算を残りの日数で割って、その日の予算で回収率重視と同じ条件の上位を買う)
@@ -146,6 +150,9 @@ def _panels(d):
     for i in range(PANELS):
         p = raw[i] if i < len(raw) and isinstance(raw[i], dict) else {}
         q = {k: p.get(k, v) for k, v in PANEL_DEFAULTS.items()}
+        for k in ("auto", "auto_time", "mode"):  # 前の版は全体で1つ
+            if k not in p and k in d:
+                q[k] = d[k]
         if "budget" not in p:  # 前の版 (1点の金額と1日の上限) から: 1点の金額 × 3点、1日の上限を超えない
             q["budget"] = max(100, min(int(p.get("stake", 100)) * VALUE_POINTS, int(p.get("cap", 1000))))
         out.append(q)
@@ -241,6 +248,12 @@ def _check_panel(p, i):
         raise ValueError(f"{name}: 1か月の投資金額は100円単位にしてください")
     if not 1 <= p["month_points"] <= 12:
         raise ValueError(f"{name}: 1日の点数は1〜12にしてください")
+    if p["mode"] not in ("test", "live"):
+        p["mode"] = "test"
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(p.get("auto_time") or "").strip())
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError(f"{name}: 自動実行の時刻は 09:30 のように入れてください")
+    p["auto_time"] = f"{int(m.group(1)):02d}:{m.group(2)}"
     sf = str(p.get("site_from") or "").strip()
     if sf:
         m = re.fullmatch(r"(\d{1,2}):(\d{2})", sf)

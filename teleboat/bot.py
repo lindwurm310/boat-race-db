@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-24a"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-24b"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -413,7 +413,7 @@ class Run:
     def go(self, pw):
         on = [(i, p) for i, p in enumerate(self.s["panels"], 1) if p.get("on")]
         self.log(f"開始 [版 {VERSION}] ({'テスト: 購入の直前で止めます' if self.mode == 'test' else '本番: 購入まで行います'})"
-                 f"・入金の上限 (オンのパネルの1日の上限の合計) {self.s['cap']:,}円"
+                 f"・入金の上限 (オンのパネルの1回の金額の合計) {self.s['cap']:,}円"
                  + f"・投票パネル {'、'.join(str(i) for i, _ in on) or 'なし'}")
         for k, label in (("memberNo", "加入者番号"), ("pin", "暗証番号"), ("authPassword", "認証用パスワード"), ("betPassword", "投票用パスワード")):
             if not store.get_secret(k):
