@@ -156,18 +156,18 @@ select { max-width:100%; text-overflow:ellipsis; }
       <div class="grid2">
         <label class="chk"><input id="p_on" type="checkbox"> この投票パネルで買う</label>
         <label>パネルの名前（空なら「投票パネルN」）<input id="p_name" maxlength="20"></label>
-        <label style="grid-column:1/-1">買う舟券の選び方（単勝）
+        <label style="grid-column:1/-1">買う舟券の選び方
           <select id="p_strategy">
             <option value="value">回収率重視（おすすめ）: 締切11:00以降・期待値1.1以上・1着確率10%以上の上位（点数・金額は下のとおり）</option>
             <option value="month">月の予算でやりくり: 1か月の投資金額を残りの日数で割って、その日の予算で回収率重視と同じ条件の上位を買う</option>
             <option value="site">サイトの設定（予想サイトの「おすすめ舟券」で決めた条件）</option>
-            <option value="model">予想モデルの買い目（期待値1以上）</option>
             <option value="hit">的中率の高い順（各レースの本命）※回収率は低め</option>
-            <option value="roi">回収率（期待値）の高い順</option>
             <option value="long">高配当狙い（予想オッズの高い順）</option>
+            <option value="tri">3連単狙い: 各艇の1着確率から出した3連単の確率が高いレース・組み合わせを買う</option>
+            <option value="trio">3連複狙い: 各艇の1着確率から出した3連複の確率が高いレース・組み合わせを買う</option>
           </select></label>
-        <label data-for="value model hit roi long site">1回の投票で使う金額（円）<input id="p_budget" type="number" step="100" min="100" inputmode="numeric"></label>
-        <label data-for="value model hit roi long">1回に買う点数（最大）<input id="p_points" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
+        <label data-for="value hit long site tri trio">1回の投票で使う金額（円）<input id="p_budget" type="number" step="100" min="100" inputmode="numeric"></label>
+        <label data-for="value hit long tri trio">1回に買う点数（最大）<input id="p_points" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
         <label class="chk"><input id="p_weighted" type="checkbox"> 期待値が高い舟券ほど多く振り分ける（オフ = 均等）</label>
         <label>このパネルの1か月の上限（円・0 = 決めない）<input id="p_month_max" type="number" step="100" min="0" inputmode="numeric"></label>
         <label class="chk"><input id="p_auto" type="checkbox"> 毎日自動で実行する（このパネルだけで）</label>
@@ -176,16 +176,22 @@ select { max-width:100%; text-overflow:ellipsis; }
           <select id="p_mode"><option value="test">テスト（購入の直前で止める）</option><option value="live">本番（購入まで）</option></select></label>
         <label data-for="month">1か月の投資金額（円）<input id="p_month_budget" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month">1日に買う最大の点数<input id="p_month_points" type="number" min="1" max="12" step="1" inputmode="numeric"></label>
+        <label data-for="month">1日あたりの投資金額の上限（円・0 = 決めない）<input id="p_month_day_max" type="number" step="100" min="0" inputmode="numeric"></label>
+        <label data-for="month">1点あたりの限度額（円・0 = 決めない）<input id="p_month_stake_max" type="number" step="100" min="0" inputmode="numeric"></label>
         <label data-for="month" class="chk"><input id="p_month_reinvest" type="checkbox"> 今月の払戻も予算に足す（答え合わせが出た分）</label>
         <div data-for="site" class="msg">サイトの設定: <span id="siteSum">-</span><br>予想サイトの「おすすめ舟券」のボタンから開くと、投票パネル1に入ります。</div>
-        <label data-for="model hit roi long">1レースで買う最大の点数<input id="p_per_race" type="number" min="1" max="6" step="1" inputmode="numeric"></label>
-        <label data-for="model hit roi long">的中率がこれ以上（%）<input id="p_min_prob" type="number" min="0" max="100" step="1" inputmode="decimal"></label>
-        <label data-for="model roi long">期待値がこれ以上<input id="p_min_ev" type="number" min="0" step="0.05" inputmode="decimal"></label>
-        <label data-for="model hit roi long">予想オッズがこれ以上<input id="p_min_odds" type="number" min="1" step="0.5" inputmode="decimal"></label>
+        <label data-for="hit long tri trio">1レースで買う最大の点数<input id="p_per_race" type="number" min="1" max="20" step="1" inputmode="numeric"></label>
+        <label data-for="hit long tri trio">的中率（本命の1着確率）がこれ以上（%）<input id="p_min_prob" type="number" min="0" max="100" step="1" inputmode="decimal"></label>
+        <label data-for="long">期待値がこれ以上<input id="p_min_ev" type="number" min="0" step="0.05" inputmode="decimal"></label>
+        <label data-for="hit long">予想オッズがこれ以上<input id="p_min_odds" type="number" min="1" step="0.5" inputmode="decimal"></label>
       </div>
       <div data-for="month" class="note" id="monthHelp">
         毎日の予算 = (1か月の投資金額 − 昨日までに使った分) ÷ 今日を入れた月の残りの日数（100円単位で切り捨て）。その日の予算を点数の舟券に振り分けます。
         候補が無くて買わなかった日の分は、次の日からの予算に回ります。1か月の投資金額は超えません（このパネルの1か月の上限も守ります）。
+      </div>
+      <div data-for="tri trio" class="note">
+        3連単・3連複は予想オッズが無いので、期待値ではなく当たる確率で選びます（金額は均等に振り分け）。各レースで確率の高い組み合わせを「1レースで買う最大の点数」まで選び、選んだ組み合わせの確率の合計が高いレースから「1回に買う点数」まで買います。
+        過去の答え合わせでは、3連単・3連複の回収率はおおむね75〜87%で、100%を超える買い方は見つかっていません。はじめはテストで動きを確かめてください。
       </div>
       <div class="row" style="margin-top:12px">
         <button class="primary" id="p_save">このパネルを保存</button>
@@ -209,7 +215,7 @@ select { max-width:100%; text-overflow:ellipsis; }
       <div id="months" class="scroll msg">-</div>
       <h2 style="margin-top:14px">日ごと</h2>
       <div id="results" class="msg">-</div>
-      <p class="note">当たり外れは、翌朝の答え合わせが出てから分かります（それまでは「結果待ち」で、収支・回収率には入れません）。払戻は単勝配当 × 金額で計算しています。
+      <p class="note">当たり外れは、翌朝の答え合わせが出てから分かります（それまでは「結果待ち」で、収支・回収率には入れません）。払戻は配当（単勝・3連単・3連複）× 金額で計算しています。
         Excel のファイルは Google スプレッドシートでも開けます（ドライブに上げて開く、または「ファイル → インポート」）。</p>
     </section>
   </div>
@@ -232,7 +238,9 @@ const roi = (pay, stake) => stake ? Math.round(pay / stake * 100) + "%" : "-";
 const pct = (v) => v == null ? "-" : Math.round(v * 100) + "%";
 const f2 = (v) => v == null ? "-" : (+v).toFixed(2);
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-const STRAT = {value: "回収率重視", month: "月の予算でやりくり", site: "サイトの設定", model: "予想モデル", hit: "的中率の高い順", roi: "期待値の高い順", long: "高配当狙い"};
+const BET = {win: "単勝", tri: "3連単", trio: "3連複"};
+const bname = (x) => (BET[x.bet || "win"] || "単勝") + " " + esc(String(x.boat));
+const STRAT = {value: "回収率重視", month: "月の予算でやりくり", site: "サイトの設定", hit: "的中率の高い順", long: "高配当狙い", tri: "3連単狙い", trio: "3連複狙い"};
 let refreshTimer = null, shotTab = 0, lastShot = 0, filled = false, stickBottom = true, S = null, tab = 0, pFilled = 0;
 
 async function api(path, body) {
@@ -331,7 +339,7 @@ function fillPanel() {
   $("p_on").checked = p.on; $("p_name").value = p.name || ""; $("p_strategy").value = p.strategy;
   $("p_budget").value = p.budget; $("p_points").value = p.points; $("p_weighted").checked = p.weighted !== false; $("p_month_max").value = p.month_max || 0; $("p_auto").checked = p.auto; $("p_auto_time").value = p.auto_time; $("p_mode").value = p.mode; $("p_per_race").value = p.per_race || 1;
   $("p_min_prob").value = Math.round((p.min_prob || 0) * 100); $("p_min_ev").value = p.min_ev ?? 1; $("p_min_odds").value = p.min_odds ?? 1;
-  $("p_month_budget").value = p.month_budget; $("p_month_points").value = p.month_points; $("p_month_reinvest").checked = p.month_reinvest;
+  $("p_month_budget").value = p.month_budget; $("p_month_points").value = p.month_points; $("p_month_reinvest").checked = p.month_reinvest; $("p_month_day_max").value = p.month_day_max || 0; $("p_month_stake_max").value = p.month_stake_max || 0;
   $("siteSum").textContent = siteText(p);
   $("pOnBadge").textContent = p.on ? "オン" : "オフ"; $("pOnBadge").className = "badge " + (p.on ? "on" : "");
   $("p_msg").textContent = "";
@@ -342,7 +350,7 @@ $("p_save").onclick = async () => {
   const body = {panel: i, on: $("p_on").checked, name: $("p_name").value.trim(), strategy: $("p_strategy").value,
     budget: +$("p_budget").value, points: +$("p_points").value || 3, weighted: $("p_weighted").checked, month_max: +$("p_month_max").value || 0, auto: $("p_auto").checked, auto_time: $("p_auto_time").value || "09:30", mode: $("p_mode").value, per_race: +$("p_per_race").value || 1,
     min_prob: (+$("p_min_prob").value || 0) / 100, min_ev: +$("p_min_ev").value || 0, min_odds: +$("p_min_odds").value || 1,
-    month_budget: +$("p_month_budget").value || 0, month_points: +$("p_month_points").value || 3, month_reinvest: $("p_month_reinvest").checked};
+    month_budget: +$("p_month_budget").value || 0, month_points: +$("p_month_points").value || 3, month_reinvest: $("p_month_reinvest").checked, month_day_max: +$("p_month_day_max").value || 0, month_stake_max: +$("p_month_stake_max").value || 0};
   try {
     await api("/api/settings", body);
     $("p_msg").textContent = "保存しました"; $("p_msg").className = "msg";
@@ -372,9 +380,9 @@ async function loadPlan() {
     head.innerHTML = notes.join("<br>") + (tab ? "" : `<br>合計: 今回使える金額 ${yen(p.room)}・買う合計 ${yen(rows.reduce((a, x) => a + x.stake, 0))}`);
     const t = document.createElement("div");
     t.className = "scroll";
-    t.innerHTML = rows.length ? "<table><tr><th>締切</th>" + (tab ? "" : "<th>パネル</th>") + "<th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
+    t.innerHTML = rows.length ? "<table><tr><th>締切</th>" + (tab ? "" : "<th>パネル</th>") + "<th>場</th><th>R</th><th>買い目</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>" +
       [...rows].sort((a, b) => a.deadline.localeCompare(b.deadline)).map((x) => `<tr><td>${x.deadline}</td>` + (tab ? "" : `<td>${x.panel}</td>`) +
-        `<td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake)}</td><td class=n>${pct(x.prob)}</td><td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table>" : "";
+        `<td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${bname(x)}</td><td class=n>${yen(x.stake)}</td><td class=n>${pct(x.prob)}</td><td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table>" : "";
     box.replaceChildren(head, t);
   } catch (e) { box.textContent = "読めませんでした: " + e.message; }
 }
@@ -396,8 +404,8 @@ function showApprovals(aps) {
     c.className = "card"; c.style.border = "2px solid var(--ng)";
     c.innerHTML = `<h2 style="color:var(--ng)">${esc(ap.name)}: この舟券を買います（購入前の確認）</h2>` +
       `<div class="msg">${esc(ap.at)} ${esc(ap.why)}: ${ap.rows.length}点・合計 ${ap.total.toLocaleString()}円${ap.note ? `（${esc(ap.note)}）` : ""}</div>` +
-      `<div class="scroll"><table><tr><th>締切</th><th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>` +
-      ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake)}</td><td class=n>${pct(x.prob)}</td>` +
+      `<div class="scroll"><table><tr><th>締切</th><th>場</th><th>R</th><th>買い目</th><th class=n>金額</th><th class=n>的中率</th><th class=n>予想オッズ</th><th class=n>期待値</th></tr>` +
+      ap.rows.map((x) => `<tr><td>${x.deadline}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${bname(x)}</td><td class=n>${yen(x.stake)}</td><td class=n>${pct(x.prob)}</td>` +
         `<td class=n>${x.odds == null ? "-" : (+x.odds).toFixed(1)}</td><td class=n>${f2(x.ev)}</td></tr>`).join("") + "</table></div>" +
       `<div class="row" style="margin-top:12px"><button class="live">${esc(ap.name)}のこの舟券を購入する</button><button>やめる</button></div>` +
       `<p class="note">「購入する」を押すまでは入金も購入もしません。押したときに締切まで3分を切った舟券は買いません。ほかのパネルが実行中なら、終わってから買います。</p>`;
@@ -442,8 +450,8 @@ async function loadResults() {
       const det = document.createElement("details");
       det.innerHTML = `<summary>${d.date.slice(5).replace("-", "/")}　購入 ${yen(d.stake)}・払戻 ${yen(d.payout)}・収支 ${sign(d.payout - d.settled)}・的中 ${d.hit}/${d.n - d.pending}点` +
         (d.pending ? `（結果待ち ${d.pending}点）` : "") + `</summary><div class="scroll">` +
-        `<table><tr><th>締切</th><th>場</th><th>R</th><th>単勝</th><th class=n>金額</th><th>結果</th><th class=n>払戻</th></tr>` +
-        d.tickets.map((x) => `<tr><td>${x.deadline || "-"}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${x.boat}</td><td class=n>${yen(x.stake)}</td><td>${esc(x.result)}</td><td class=n>${x.payout ? yen(x.payout) : "-"}</td></tr>`).join("") +
+        `<table><tr><th>締切</th><th>場</th><th>R</th><th>買い目</th><th class=n>金額</th><th>結果</th><th class=n>払戻</th></tr>` +
+        d.tickets.map((x) => `<tr><td>${x.deadline || "-"}</td><td>${esc(x.venue)}</td><td>${x.rno}R</td><td>${bname(x)}</td><td class=n>${yen(x.stake)}</td><td>${esc(x.result)}</td><td class=n>${x.payout ? yen(x.payout) : "-"}</td></tr>`).join("") +
         `</table></div>`;
       return det;
     }));

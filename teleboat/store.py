@@ -48,14 +48,13 @@ PANEL_DEFAULTS = {
     "auto": True,          # 毎日 auto_time に、このパネルだけで実行する
     "auto_time": "09:30",
     "mode": "test",        # test = 購入の直前で止める / live = 購入まで行う
-    # 買う舟券の選び方 (単勝)
+    # 買う舟券の選び方
     #   value = 回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上の上位3点)
     #   month = 月の予算でやりくり (1か月の予算を残りの日数で割って、その日の予算で回収率重視と同じ条件の上位を買う)
     #   site  = 予想サイトの「おすすめ舟券」で決めた条件
-    #   model = 予想モデルの買い目 (期待値が1を超えたもの) を期待値の高い順
     #   hit   = 的中率の高い順 (各レースの1着確率が一番高い艇)
-    #   roi   = 回収率 (期待値 = 1着確率 × 予想オッズ) の高い順。全部の艇から選ぶ
     #   long  = 高配当狙い (予想オッズが高い艇のうち、期待値が条件を満たすもの)
+    #   tri / trio = 3連単狙い / 3連複狙い (各艇の1着確率から出した組み合わせの確率の高い順。オッズが無いので期待値は使わない)
     "strategy": "value",
     "min_prob": 0.0,       # 1着確率がこれ未満の艇は買わない (0〜1)
     "min_ev": 1.0,         # 期待値がこれ未満の艇は買わない (hit 以外)
@@ -70,9 +69,11 @@ PANEL_DEFAULTS = {
     # strategy = "month" のとき
     "month_budget": 30000, # 1か月の投資金額 (円)
     "month_points": 3,     # 1日に買う最大の点数
+    "month_day_max": 0,    # 1日あたりの投資金額の上限 (円)。0 = 決めない
+    "month_stake_max": 0,  # 1点あたりの限度額 (円)。0 = 決めない
     "month_reinvest": False,  # 今月の払戻 (答え合わせが出た分) を予算に足す
 }
-STRATEGY_KEYS = ("value", "month", "site", "model", "hit", "roi", "long")
+STRATEGY_KEYS = ("value", "month", "site", "hit", "long", "tri", "trio")
 LEGACY_PANEL_KEYS = ("stake", "strategy", "min_prob", "min_ev", "min_odds", "per_race",
                      "site_ev", "site_prob", "site_budget", "site_points", "site_from")
 
@@ -155,6 +156,8 @@ def _panels(d):
                 q[k] = d[k]
         if "budget" not in p:  # 前の版 (1点の金額と1日の上限) から: 1点の金額 × 3点、1日の上限を超えない
             q["budget"] = max(100, min(int(p.get("stake", 100)) * VALUE_POINTS, int(p.get("cap", 1000))))
+        if q.get("strategy") not in STRATEGY_KEYS:  # やめた買い方 (予想モデルの買い目・期待値の高い順) は回収率重視に
+            q["strategy"] = "value"
         out.append(q)
     return out
 
@@ -174,7 +177,8 @@ def load_settings():
     out["panels"] = _panels(d)
     # 1日に入金・購入する上限 = オンの投票パネルの1日の上限の合計 (全体の上限は無い)
     # (前の版の1日の上限の代わり。「月の予算」のパネルは月の予算を入れる。実際の入金は足りない分だけ)
-    out["cap"] = sum(p["month_budget"] if p["strategy"] == "month" else p["budget"] for p in out["panels"] if p["on"])
+    out["cap"] = sum((min(p["month_budget"], p["month_day_max"]) if p["month_day_max"] else p["month_budget"]) if p["strategy"] == "month" else p["budget"]
+                     for p in out["panels"] if p["on"])
     out["token"] = d["token"]
     out["secrets_set"] = {k: bool(d.get("secret_" + k)) for k in SECRET_KEYS}
     out["panel_pw_set"] = bool(d.get("panel_pw"))
@@ -236,8 +240,8 @@ def _check_panel(p, i):
         raise ValueError(f"{name}: 点数は1〜20にしてください")
     if p["strategy"] not in STRATEGY_KEYS:
         p["strategy"] = "value"
-    if not 1 <= p["per_race"] <= 6:
-        raise ValueError(f"{name}: 1レースの点数は1〜6にしてください")
+    if not 1 <= p["per_race"] <= 20:
+        raise ValueError(f"{name}: 1レースの点数は1〜20にしてください")
     if not 0 <= p["site_prob"] <= 1 or p["site_ev"] < 0:
         raise ValueError(f"{name}: サイトの設定の期待値・1着確率がおかしいです")
     if p["site_budget"] < 0 or p["site_points"] < 0:
@@ -246,6 +250,9 @@ def _check_panel(p, i):
         raise ValueError(f"{name}: 1か月の上限は100円単位にしてください (0 = 決めない)")
     if p["month_budget"] < 0 or p["month_budget"] % 100:
         raise ValueError(f"{name}: 1か月の投資金額は100円単位にしてください")
+    for k, label in (("month_day_max", "1日あたりの上限"), ("month_stake_max", "1点あたりの限度額")):
+        if p[k] < 0 or p[k] % 100:
+            raise ValueError(f"{name}: {label}は100円単位にしてください (0 = 決めない)")
     if not 1 <= p["month_points"] <= 12:
         raise ValueError(f"{name}: 1日の点数は1〜12にしてください")
     if p["mode"] not in ("test", "live"):
