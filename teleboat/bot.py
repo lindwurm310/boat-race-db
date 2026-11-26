@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-24c"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-27a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -36,6 +36,10 @@ class Stopped(Exception):
 
 class BotError(Exception):
     pass
+
+
+class Closed(BotError):
+    """テレボートの受付時間外 (ログイン欄が使えない)。受付が始まったらやり直す"""
 
 
 class WrongBet(Exception):
@@ -616,6 +620,20 @@ class Run:
         self.page = page
         page.goto(TOP_URL, wait_until="domcontentloaded", timeout=60000)
         self.wait_until(lambda: self.is_vis("#memberNo"), "ログイン画面が出ません", 30)
+        # 受付時間外 (早朝など) はログイン欄が押せない (disabled) ままになる。待ってもだめなら受付時間外として止める
+        box = page.locator("#memberNo").first
+        end = time.time() + 8
+        while not box.is_enabled() and time.time() < end:
+            time.sleep(1)
+        if not box.is_enabled():
+            try:
+                text = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=3000))
+                hit = re.search(r"[^。]{0,40}(時間|受付|ご利用)[^。]{0,40}", text)
+                info = (hit.group(0) if hit else text[:80]).strip()
+            except Exception:
+                info = ""
+            self.shot("00_login_closed")
+            raise Closed("テレボートの受付時間外のようです (ログイン欄が使えません)" + (f"。画面の表示: {info}" if info else ""))
         self.type_in("#memberNo", store.get_secret("memberNo"), "加入者番号", secret=True)
         self.type_in("#pin", store.get_secret("pin"), "暗証番号", secret=True)
         self.type_in("#authPassword", store.get_secret("authPassword"), "認証用パスワード", secret=True)

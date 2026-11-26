@@ -281,7 +281,8 @@ async function refresh() {
   if (forTab !== tab) { sched(50); return; }  // 読んでいる間にタブを変えた
   S = s;
   $("clock").textContent = `${s.date} ${s.now}・版 ${s.version || "古い版"}`;
-  $("state").textContent = (s.running ? `実行中 (${s.run_panels.map(pname).join("・")}): ${s.step}` : "待機中") + (s.queue ? `・順番待ち ${s.queue}件` : "");
+  $("state").textContent = (s.running ? `実行中 (${s.run_panels.map(pname).join("・")}): ${s.step}` : "待機中") + (s.queue ? `・順番待ち ${s.queue}件` : "") +
+    (s.retries && s.retries.length ? "・受付待ちの予約 " + s.retries.map((r) => `${r.panels.map(pname).join("・") || "全部"} ${r.at}`).join("、") : "");
   $("modeBadge").textContent = s.running ? (s.last.mode === "live" ? "本番" : "テスト") : "";
   $("modeBadge").className = "badge " + (s.running ? (s.last.mode === "live" ? "live" : "test") : "");
   $("stop").disabled = !s.running;

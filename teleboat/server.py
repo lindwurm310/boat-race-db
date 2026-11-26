@@ -46,6 +46,7 @@ class App:
         self.shot_at = {}       # パネルの番号 (0 = 全部) → 最後に画面写真を撮った時刻
         self.run_panels = None  # 実行中のときのオンの投票パネル
         self.queue = collections.deque()  # 順番待ちの実行 (パネルごと)
+        self.retries = []  # テレボートの受付時間外で止まった実行。受付が始まるまで10分ごとにやり直す
         self.qlock = threading.RLock()
         self.check_cache = {}
         self.fix_1117()
@@ -136,6 +137,7 @@ class App:
             s = self.only_panels(s, panels)
             self.stop.clear()
             month = self.month_ctx(s)
+            self.cur = (mode, why, only, panels)
             self.thread = threading.Thread(target=self._work, args=(s, mode, why, only, month), daemon=True)
             self.thread.start()
             return True, "開始しました"
@@ -225,6 +227,10 @@ class App:
         except bot.Stopped as e:
             self.log(str(e))
             self.last["result"] = "停止"
+        except bot.Closed as e:
+            self.last["result"] = "受付時間外"
+            self.log(f"{e}")
+            self.retry_later()
         except (bot.BotError, bot.WrongBet) as e:
             self.log(f"止めました ({r.step}): {e}")
             self.last["result"] = f"エラー: {e}"
@@ -239,6 +245,40 @@ class App:
             self.log(f"===== 終わり ({self.last['result']}・{self.last['sec']}秒)")
             self.current = None
             threading.Thread(target=self.next_in_queue, daemon=True).start()
+
+    RETRY_MIN = float(os.environ.get("TELEBOAT_RETRY_MIN", 10))  # 受付時間外のやり直し: 10分ごと
+    RETRY_HOURS = 4  # 最初に止まってから4時間まで
+
+    def retry_later(self):
+        """受付時間外で止まった実行を、10分後にもう一度 (同じ確認済みの舟券・同じパネルで) やる"""
+        mode, why, only, panels = getattr(self, "cur", ("test", "手動", None, None))
+        now = dt.datetime.now()
+        first = next((r["first"] for r in self.retries if r["panels"] == panels), None)
+        if first is None and "受付待ち" in why:
+            first = getattr(self, "retry_first", None)
+        first = first or now
+        with self.qlock:
+            self.retries = [r for r in self.retries if r["panels"] != panels]
+            if now - first > dt.timedelta(hours=self.RETRY_HOURS):
+                self.log(f"受付時間外のまま {self.RETRY_HOURS}時間たったので、やり直しをやめます", panels)
+                return
+            at = now + dt.timedelta(minutes=self.RETRY_MIN)
+            if at.date() != now.date():
+                self.log("日が変わるので、やり直しはしません", panels)
+                return
+            self.retries.append({"at": at, "first": first, "mode": mode, "why": why, "only": only, "panels": panels})
+        self.log(f"テレボートの受付が始まったら自動でやり直します (予約。次は {at:%H:%M}。やめるときは「停止」)", panels)
+
+    def due_retries(self):
+        now = dt.datetime.now()
+        with self.qlock:
+            due = [r for r in self.retries if r["at"] <= now]
+            self.retries = [r for r in self.retries if r["at"] > now]
+        for r in due:
+            why = r["why"] if "受付待ち" in r["why"] else f"{r['why']}・受付待ちのやり直し"
+            self.start(r["mode"], why, r["only"], r["panels"])
+            # 同じ日の最初の時刻は覚えておく (4時間で終わり)
+            self.retry_first = r["first"]
 
     def next_in_queue(self):
         time.sleep(3)  # テレボートを続けて開かないように少しあける
@@ -272,6 +312,7 @@ class App:
         return {
             "running": self.running(), "step": self.current.step if self.current else "",
             "run_panels": list(self.run_panels or []) if self.running() else [], "queue": len(self.queue),
+            "retries": [{"at": r["at"].strftime("%H:%M"), "panels": r["panels"] or []} for r in self.retries],
             "settings": s, "today": st, "last": self.last, "log": lines, "shot_at": self.shot_at.get(panel or 0, 0),
             "month_spent": month.get("total_before", 0) + st.get("spent", 0), "panels": panels,
             "version": bot.VERSION, "date": today, "now": dt.datetime.now().strftime("%H:%M:%S"),
@@ -441,6 +482,10 @@ class App:
     def scheduler(self):
         """パネルごとに、毎日 そのパネルの時刻に1回だけ実行する (時刻を過ぎてから起きても 2 時間以内なら実行)"""
         while True:
+            try:
+                self.due_retries()
+            except Exception as e:
+                self.log(f"受付待ちのやり直しでエラー: {e}")
             try:
                 s = store.load_settings()
                 now = dt.datetime.now()
@@ -653,6 +698,9 @@ def make_handler(app):
                     app.stop.set()
                     with app.qlock:
                         app.queue.clear()
+                        if app.retries:
+                            app.retries = []
+                            app.log("受付待ちのやり直し (予約) を取り消しました")
                     self.send(200, {"ok": True})
                 elif u.path == "/api/settings":
                     store.save_settings(body)
