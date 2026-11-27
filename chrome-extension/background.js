@@ -10,5 +10,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // sendResponse を後で呼ぶ
 });
 
-// ツールバーのボタン: 操作画面 (今日の予想・答え合わせ・振り返り・学習など) を開く
-chrome.action.onClicked.addListener(() => chrome.tabs.create({url: `${SERVER}/`}));
+// ツールバーのボタン: 設定画面を開く (操作画面・テレボートへのリンクもそこにある)
+chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
+chrome.runtime.onMessage.addListener((msg) => { if (msg.type === "openOptions") chrome.runtime.openOptionsPage(); });
+
+// テレボートの投票画面用: 予想ページ (GitHub Pages) からその日の予想を読む
+const PAGES = "https://lindwurm310.github.io/boat-race-db";
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type !== "predictions" || !/^\d{4}-\d{2}-\d{2}$/.test(msg.date)) return;
+  fetch(`${PAGES}/data/predictions/${msg.date}.json`, {cache: "no-store"})
+    .then(async (r) => sendResponse({ok: r.ok, body: r.ok ? await r.json() : null}))
+    .catch(() => sendResponse({ok: false}));
+  return true;
+});
+
+// 拡張機能のファイルが入れ替わったら (update_extension.ps1)、自分で読み込み直す。1分ごとに manifest.json の版を見る。
+chrome.alarms.create("selfReload", {periodInMinutes: 1});
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== "selfReload") return;
+  fetch(chrome.runtime.getURL("manifest.json"), {cache: "no-store"})
+    .then((r) => r.json())
+    .then((m) => { if (m.version !== chrome.runtime.getManifest().version) chrome.runtime.reload(); })
+    .catch(() => {});
+});

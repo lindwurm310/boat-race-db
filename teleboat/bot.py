@@ -1,0 +1,1008 @@
+"""テレボート (ib.mbrace.or.jp) で、今日の予想の買い目 (単勝・3連単・3連複) を買う。Playwright で Edge を動かす。
+
+流れ: ログイン → 開催一覧 → (足りなければ入金) → 投票画面で期待値の高い順にベットリストへ → 投票入力完了
+      → 購入確認画面で金額・投票用パスワードを入れて「投票する」
+mode が "test" のときは、購入確認画面で入れるところまでで止める (入金もしない)。
+
+守ること:
+  - 1日の上限 (cap) を超えて買わない・入金しない。買えた分は state に記録して二重に買わない
+  - 操作ごとに 1.5〜2 秒あけ、文字は1文字ずつ打つ (速いとテレボートが「連続して操作された」エラーを出す)
+  - パスワード類はログ・画面写真の保存先に書かない
+"""
+import datetime as dt
+import json
+import math
+import os
+import random
+import re
+import time
+import urllib.error
+import urllib.request
+
+import store
+
+TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テストのときだけ差し替える
+CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
+PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
+MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
+VERSION = "2026-11-27a"  # ログの最初に出す (更新が入ったかを確かめるため)
+# テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
+JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
+
+
+class Stopped(Exception):
+    pass
+
+
+class BotError(Exception):
+    pass
+
+
+class Closed(BotError):
+    """テレボートの受付時間外 (ログイン欄が使えない)。受付が始まったらやり直す"""
+
+
+class WrongBet(Exception):
+    """ベットリストに思ったのと違う舟券が入ったかもしれない。その回は買わずに止める"""
+
+
+# ---------------- 予想 → 買い目 ----------------
+def fetch_check(date):
+    """その日の答え合わせ (着順・単勝配当)。まだ無ければ None"""
+    req = urllib.request.Request(CHECK_URL.format(date=date) + f"?t={int(time.time())}",
+                                 headers={"Cache-Control": "no-cache", "User-Agent": "boatrace-teleboat"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def fetch_predictions(date):
+    req = urllib.request.Request(PRED_URL.format(date=date) + f"?t={int(time.time())}",
+                                 headers={"Cache-Control": "no-cache", "User-Agent": "boatrace-teleboat"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+STRATEGIES = {
+    "site": "サイトの設定 (予想サイトの「おすすめ舟券」で決めた条件)",
+    "value": "回収率重視 (締切11:00以降・期待値1.1以上・1着確率10%以上のうち、期待値の上位。点数・金額は設定のとおり)",
+    "month": "月の予算でやりくり (1か月の予算を残りの日数で割った額で、回収率重視と同じ条件の上位を買う)",
+    "hit": "的中率の高い順 (各レースの本命)",
+    "tri": "3連単狙い (各艇の1着確率から出した3連単の確率が高いレース・組み合わせの順)",
+    "trio": "3連複狙い (各艇の1着確率から出した3連複の確率が高いレース・組み合わせの順)",
+    "long": "高配当狙い (予想オッズが高い順)",
+}
+
+
+def _num(v):
+    try:
+        x = float(v)
+        return x if x == x else None  # NaN を除く
+    except (TypeError, ValueError):
+        return None
+
+
+BET_NAME = {"win": "単勝", "tri": "3連単", "trio": "3連複"}
+
+
+def tname(x):
+    """舟券の表記 (例: 単勝1、3連単1-4-3、3連複1=3=4)"""
+    return f"{BET_NAME.get(x.get('bet', 'win'), '単勝')}{x['boat']}"
+
+
+def order_probs(p):
+    """各艇の1着確率から、3連単の各組み合わせの確率を出す (1着を決めたら残りの艇の中で同じ比で2着・3着が決まるとする)"""
+    out = {}
+    for a in p:
+        for b in p:
+            for c in p:
+                if len({a, b, c}) < 3:
+                    continue
+                r1, r2 = 1 - p[a], 1 - p[a] - p[b]
+                if r1 <= 0 or r2 <= 0:
+                    continue
+                out[(a, b, c)] = p[a] * p[b] / r1 * p[c] / r2
+    return out
+
+
+def combo_picks(rows, s, kind):
+    """3連単 (tri)・3連複 (trio) の買い目。オッズが無いので期待値は使わず、確率の高い組み合わせを買う。
+    1レースの点数 (per_race) まで確率の高い順 (3連単は予想の「3連単上位5点」の順を先に) に選び、選んだ組み合わせの確率の合計が高いレースから並べる (同じレースの組み合わせはまとめて買う)。
+    本命の1着確率 (min_prob) より低いレースは買わない"""
+    per_race = int(s.get("per_race", 1) or 1)
+    min_prob = float(s.get("min_prob", 0) or 0)
+    out = []
+    for r in rows:
+        _, jcd, rno = r["race_id"].split("-")
+        p = {str(b): _num(r.get(f"{b}号艇")) for b in range(1, 7)}
+        p = {b: v for b, v in p.items() if v is not None and v > 0}
+        if len(p) < 3 or max(p.values()) < min_prob:
+            continue
+        tri = order_probs(p)
+        if kind == "trio":
+            pr = {}
+            for k, v in tri.items():
+                pr[tuple(sorted(k, key=int))] = pr.get(tuple(sorted(k, key=int)), 0) + v
+            sep = "="
+        else:
+            pr, sep = tri, "-"
+        ranked = sorted(pr.items(), key=lambda kv: -kv[1])
+        if kind == "tri":  # 予想モデルの「3連単上位5点」を先に (2着・3着の当て方はモデルのほうが良い)
+            model = [tuple(c.split("-")) for c in str(r.get("3連単上位5点") or "").split() if len(c.split("-")) == 3]
+            model = [k for k in model if k in pr]
+            ranked = [(k, pr[k]) for k in model] + [kv for kv in ranked if kv[0] not in model]
+        top = ranked[:per_race]
+        cover = sum(v for _, v in top)
+        for k, v in top:
+            combo = sep.join(k)
+            out.append({"key": f"{r['race_id']}-{kind}-{combo}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
+                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "bet": kind, "boat": combo,
+                        "prob": v, "odds": None, "ev": 0.0, "score": cover + v / 1000})
+    return sorted(out, key=lambda p: p["deadline"])
+
+
+def picks(rows, settings=None):
+    """予想の行から、1点ずつの単勝の買い目を作る。settings の strategy で選び方を変える。
+    各買い目: key, race_id, jcd, rno, venue, deadline, boat, prob (1着確率), odds (予想オッズ), ev (期待値), score (並べる値)"""
+    s = settings or {}
+    strategy = s.get("strategy", "value")
+    if strategy in ("tri", "trio"):
+        return combo_picks(rows, s, strategy)
+    if strategy in ("value", "month"):  # 過去2年の検証で回収率が一番安定して高かった条件 (analysis/README.md)
+        # 過去5年の検証 (analysis/osusume/README.md) で、その日の上位3点×300円が回収率と安定のバランスが一番良かった
+        strategy, min_prob, min_ev = "roi", 0.10, 1.1
+        min_odds, per_race = 0.0, 6
+    elif strategy == "site":  # 予想サイトの「おすすめ舟券」と同じ: 全部の艇から、期待値の高い順 (1レースの点数は決めない)
+        strategy, min_prob, min_ev = "roi", float(s.get("site_prob", 0.1) or 0), float(s.get("site_ev", 1.1) or 0)
+        min_odds, per_race = 0.0, 6
+    else:
+        min_prob, min_ev = float(s.get("min_prob", 0) or 0), float(s.get("min_ev", 1.0) or 0)
+        min_odds, per_race = float(s.get("min_odds", 1.0) or 0), int(s.get("per_race", 1) or 1)
+    out = []
+    for r in rows:
+        _, jcd, rno = r["race_id"].split("-")
+        cands = []
+        for b in range(1, 7):
+            prob, odds = _num(r.get(f"{b}号艇")), _num(r.get(f"{b}号艇の予想オッズ"))
+            ev = prob * odds if prob is not None and odds is not None else None
+            cands.append({"boat": str(b), "prob": prob, "odds": odds, "ev": ev})
+        by_boat = {c["boat"]: c for c in cands}
+        if strategy == "model":
+            boats = str(r.get("単勝買い目") or "").split()
+            evs = str(r.get("買い目の期待値") or "").split()
+            chosen = []
+            for i, b in enumerate(boats):
+                c = dict(by_boat.get(b) or {"boat": b, "prob": None, "odds": None})
+                c["ev"] = _num(evs[i]) if i < len(evs) else c.get("ev")
+                c["score"] = c["ev"] or 0
+                chosen.append(c)
+        else:
+            ok = [c for c in cands if c["prob"] is not None and c["prob"] >= min_prob
+                  and (c["odds"] is None or c["odds"] >= min_odds)]
+            if strategy == "hit":
+                ok = sorted(ok, key=lambda c: -c["prob"])
+                for c in ok:
+                    c["score"] = c["prob"]
+            else:
+                ok = [c for c in ok if c["ev"] is not None and c["ev"] >= min_ev]
+                key = "ev" if strategy == "roi" else "odds"
+                ok = sorted(ok, key=lambda c: -c[key])
+                for c in ok:
+                    c["score"] = c[key]
+            chosen = ok
+        for c in chosen[:per_race]:
+            out.append({"key": f"{r['race_id']}-{c['boat']}", "race_id": r["race_id"], "jcd": jcd, "rno": int(rno),
+                        "venue": r.get("場", ""), "deadline": r.get("締切", ""), "bet": "win", "boat": c["boat"],
+                        "prob": c.get("prob"), "odds": c.get("odds"), "ev": c.get("ev") or 0.0, "score": c.get("score") or 0.0})
+    return sorted(out, key=lambda p: p["deadline"])
+
+
+VALUE_POINTS, VALUE_FROM = 3, "11:00"  # 点数の初期値・「回収率重視」「月の予算」の締切の時刻
+
+
+def days_left(date):
+    """その月の残りの日数 (今日を入れる)"""
+    d = dt.date.fromisoformat(date)
+    nxt = (d.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
+    return (nxt - d).days
+
+
+def month_budget_today(settings, month, date):
+    """「月の予算でやりくり」の今日の予算 = (1か月の予算 [+ 今月の払戻] − 昨日までに使った分) ÷ 今日を入れた残りの日数。
+    買わなかった日の分は次の日からに回る。今日の予算と、計算の説明を返す"""
+    m = month or {}
+    total = int(settings.get("month_budget") or 0)
+    back = int(m.get("payout", 0)) if settings.get("month_reinvest") else 0
+    left = max(0, total + back - int(m.get("spent_before", 0)))
+    n = days_left(date)
+    budget = left // n // 100 * 100
+    why = (f"今月の予算 {total:,}円" + (f" + 払戻 {back:,}円" if back else "") + f" − 昨日までに使った {int(m.get('spent_before', 0)):,}円"
+           f" = 残り {left:,}円 ÷ {n}日 → 今日の予算 {budget:,}円")
+    return budget, why
+
+
+def allocate(cands, budget, weighted=True, cap=0):
+    """予算を舟券に振り分ける (100円単位・1点最低100円)。weighted なら期待値が高いほど多く。
+    重み = 期待値 − 0.9 (期待値1.1 → 0.2、1.5 → 0.6 で3倍)。
+    cap (円) を決めたら1点の金額はそれまで。超えた分はほかの舟券に回し、全部が上限なら残りは使わない。
+    返す: 金額のリスト (cands と同じ順)"""
+    n = len(cands)
+    units = budget // 100
+    cu = cap // 100 if cap else 0
+    if cu:
+        units = min(units, cu * n)
+    if not n or units < n:
+        return []
+    if weighted:
+        w = [max(0.05, float(c.get("ev") or 0) - 0.9) for c in cands]
+    else:
+        w = [1.0] * n
+    got = [1] * n  # 1点100円ずつ配ってから、残りを重みで分ける
+    free = list(range(n))
+    while True:
+        rest = units - sum(got)
+        if rest <= 0 or not free:
+            break
+        tw = sum(w[i] for i in free)
+        raw = {i: rest * w[i] / tw for i in free}
+        add = {i: int(raw[i]) for i in free}
+        left = rest - sum(add.values())
+        for i in sorted(free, key=lambda i: -(raw[i] - int(raw[i])))[:left]:  # 端数は小数部の大きい順
+            add[i] += 1
+        over = False
+        for i in free:
+            got[i] += add[i]
+            if cu and got[i] > cu:
+                got[i] = cu
+                over = True
+        free = [i for i in free if not cu or got[i] < cu]
+        if not over:
+            break
+    return [g * 100 for g in got]
+
+
+def plan(all_picks, settings, state, balance=None, now=None, room_limit=None, month=None, date=None):
+    """締切前・まだ買っていない買い目から、このパネルが今回買う舟券と金額を決める。
+    settings: 投票パネル1つの設定 (budget = 1回の投票で使う金額、points = 点数)。state: そのパネルの今日の bought / spent。
+    month: 今月の使った分・払戻 (「月の予算」と1か月の上限)。
+    返す want の各舟券に stake (金額) が入る。期待値が高い舟券ほど多く振り分ける"""
+    now = now or dt.datetime.now()
+    cut = (now + dt.timedelta(minutes=MARGIN_MIN)).strftime("%H:%M")
+    bought = set(state.get("bought", []))
+    open_ = [p for p in all_picks if p["deadline"] > cut and p["key"] not in bought]
+    strategy = settings.get("strategy")
+    frm = {"site": settings.get("site_from") or "", "value": VALUE_FROM, "month": VALUE_FROM}.get(strategy, "")
+    late = [p for p in open_ if not frm or p["deadline"] >= frm]  # 締切がこの時刻より前のレースは除く
+    by_ev = sorted(late, key=lambda p: -p.get("score", p["ev"]))  # 選び方の値の高い順
+    spent = state.get("spent", 0)
+    budget = int(settings.get("budget") or 0)
+    points = int(settings.get("points") or VALUE_POINTS)
+    notes = []
+    if strategy == "month":
+        day, why = month_budget_today(settings, month, date or now.date().isoformat())
+        notes.append(why)
+        dmax = int(settings.get("month_day_max") or 0)
+        if dmax and day > dmax:
+            day = dmax
+            notes.append(f"1日あたりの上限 {dmax:,}円 にしました (残りは次の日からに回ります)")
+        budget = max(0, day - spent)  # 月の予算は1日ごと。今日もう買った分は引く
+        points = max(0, int(settings.get("month_points") or 3) - len(bought))
+    elif strategy == "site":
+        # 金額はパネルの「1回の投票で使う金額」(サイトから来た予算はそこに入れる)。点数はサイトの点数
+        sp = int(settings.get("site_points") or 0)
+        points = sp if sp else len(by_ev)
+    room = budget
+    mmax = int(settings.get("month_max") or 0)
+    if mmax:
+        mroom = max(0, mmax - int((month or {}).get("spent_before", 0)) - spent)
+        if mroom < room:
+            room = mroom
+            notes.append(f"このパネルの1か月の上限 {mmax:,}円 まであと {mroom:,}円")
+    if room_limit is not None and room_limit < room:
+        room = max(0, room_limit)
+    n = min(points, len(by_ev), room // 100)
+    want, stakes = [], []
+    if n:
+        want = by_ev[:n]
+        cap = int(settings.get("month_stake_max") or 0) if strategy == "month" else 0
+        stakes = allocate(want, room // 100 * 100, settings.get("weighted", True), cap)
+        if cap and sum(stakes) < room // 100 * 100:
+            notes.append(f"1点の上限 {cap:,}円 までなので {sum(stakes):,}円 だけ買います")
+        want = [dict(x, stake=st) for x, st in zip(want, stakes)]
+    elif by_ev and room < 100:
+        notes.append("今回使える金額が100円未満なので買いません")
+    total = sum(stakes)
+    return {
+        "want": want,                 # 今回買う分 (stake つき)
+        "cands": by_ev,               # 締切前・まだ買っていない候補 (選び方の値の高い順)
+        "dropped": by_ev[len(want):],
+        "closed": [p for p in all_picks if p["deadline"] <= cut and p["key"] not in bought],
+        "bought": [p for p in all_picks if p["key"] in bought],
+        "room": room, "balance": balance, "spent": spent, "budget": room, "total": total,
+        "stake": max(stakes) if stakes else 0, "note": "。".join(notes),
+    }
+
+
+def plan_all(rows, settings, state, month=None, balance=None, now=None, date=None):
+    """オンの投票パネルを 1 → 2 → 3 の順に計算する。上限はパネルごと (1日・1か月)。
+    month: {"total_before": 昨日までの今月の合計, 1: {"spent_before", "payout"}, ...}
+    返す: panels (パネルごとの plan)、items (買う舟券。panel と stake つき)、room (全体の残り)"""
+    month = month or {}
+    date = date or store.today()
+    tickets = store.day_tickets(state, date)
+    groom = 0  # 今日あと買える金額 = オンのパネルの残りの合計
+    panels, items = [], []
+    for i, ps in enumerate(settings["panels"], 1):
+        name = store.panel_name(ps, i)
+        if not ps.get("on"):
+            panels.append({"panel": i, "name": name, "on": False})
+            continue
+        mine = [t for t in tickets if t["panel"] == i]
+        pst = {"bought": [t["key"] for t in mine], "spent": sum(t.get("stake", 0) for t in mine)}
+        p = plan(picks(rows, ps), ps, pst, None, now, None, month.get(i), date)
+        p.update(panel=i, name=name, on=True, strategy=STRATEGIES.get(ps.get("strategy", "value")))
+        groom += p["room"]
+        panels.append(p)
+        items.extend(dict(x, panel=i) for x in p["want"])
+    buy = items
+    if balance is not None:
+        buy, used = [], 0
+        for x in items:
+            if used + x["stake"] <= balance:
+                buy.append(x)
+                used += x["stake"]
+    return {"panels": panels, "items": items, "buy": buy, "room": groom, "spent": state.get("spent", 0)}
+
+
+def item_id(x):
+    return f"{x['panel']}:{x['key']}"
+
+
+def digits(s):
+    v = re.sub(r"[^0-9]", "", s or "")
+    return int(v) if v else None
+
+
+# ---------------- 実行 ----------------
+class Run:
+    def __init__(self, settings, log, shot, stop_event, mode=None, only=None, month=None):
+        self.s = settings
+        self.mode = mode or settings["mode"]
+        self.only = dict(only) if only is not None else None  # パネルで確かめた買い目 {"パネル:キー": 金額}。これ以外は買わない
+        self.month = month or {}                              # 今月の使った分・払戻 (上限と「月の予算」の計算)
+        self.log_cb = log         # log(str, panels)
+        self.shot_cb = shot       # shot(page, name, html=None, panels=None)
+        self.ctx = None           # 今の操作がどの投票パネルのものか (None = この実行の全部のパネル)
+        self.stop = stop_event
+        self.page = None
+        self.date = store.today()
+        self.step = "準備中"
+
+    # ---- 共通の操作 ----
+    def log(self, msg, panels=None):
+        self.log_cb(msg, panels or self.ctx)
+
+    def check_stop(self):
+        if self.stop.is_set():
+            raise Stopped("停止しました")
+
+    def pause(self, a=1.5, b=2.0):
+        end = time.time() + random.uniform(a, b)
+        while time.time() < end:
+            self.check_stop()
+            time.sleep(0.1)
+
+    def wait(self, sec):
+        end = time.time() + sec
+        while time.time() < end:
+            self.check_stop()
+            time.sleep(0.2)
+
+    def shot(self, name):
+        try:
+            self.shot_cb(self.page, name, panels=self.ctx)
+        except Exception as e:  # 写真が撮れなくても続ける
+            self.log(f"(画面写真を撮れませんでした: {e})")
+
+    def vis(self, sel):
+        return self.page.locator(sel).locator("visible=true").first
+
+    def is_vis(self, sel):
+        try:
+            return self.page.locator(sel).locator("visible=true").count() > 0
+        except Exception:
+            return False
+
+    def popup_text(self):
+        try:
+            if self.is_vis("#errorPop"):
+                return re.sub(r"\s+", "", self.page.locator("#errorPop").first.inner_text())
+        except Exception:
+            pass
+        return ""
+
+    def close_busy(self):
+        """「直前の処理が完了する前に連続して操作された」が出ていたら閉じて 10 秒待つ"""
+        t = self.popup_text()
+        if "連続して操作" not in t:
+            return False
+        self.log("「連続して操作された」と出たので閉じて10秒待ちます")
+        for sel in ("#errorPop #ok", "#errorPop #close", "#errorPop a"):
+            if self.is_vis(sel):
+                self.vis(sel).click()
+                break
+        self.wait(10)
+        return True
+
+    def click(self, sel, what=None, timeout=15000):
+        self.pause()
+        loc = self.vis(sel)
+        try:
+            loc.wait_for(state="visible", timeout=timeout)
+        except Exception:
+            raise BotError(f"{what or sel} が見つかりません")
+        loc.click()
+
+    def type_in(self, sel, value, what, secret=False):
+        """1文字ずつ打つ (速すぎるとエラーになるので)"""
+        self.pause(0.8, 1.2)
+        loc = self.vis(sel)
+        try:
+            loc.wait_for(state="visible", timeout=15000)
+        except Exception:
+            raise BotError(f"{what}の欄が見つかりません")
+        loc.click()
+        loc.fill("")
+        loc.press_sequentially(str(value), delay=random.randint(120, 200))
+        loc.dispatch_event("change")
+        self.log(f"{what}を入れました" + ("" if secret else f": {value}"))
+
+    def wait_until(self, fn, what, sec=15):
+        end = time.time() + sec
+        while time.time() < end:
+            self.check_stop()
+            try:
+                if fn():
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.25)
+        raise BotError(what)
+
+    def with_retry(self, fn, *a):
+        try:
+            return fn(*a)
+        except BotError:
+            if not self.close_busy():
+                raise
+            return fn(*a)
+
+    # ---- 本体 ----
+    def make_plan(self, rows, state, balance=None):
+        pl = plan_all(rows, self.s, state, self.month, balance, date=self.date)
+        if self.only is not None:
+            # パネルで確かめた舟券を、確かめたときの金額で買う (締切が近い・もう買ったものは除く)
+            items = []
+            for p in pl["panels"]:
+                if not p["on"]:
+                    continue
+                mine = [dict(c, panel=p["panel"], stake=self.only[f"{p['panel']}:{c['key']}"])
+                        for c in p["cands"] if f"{p['panel']}:{c['key']}" in self.only]
+                if sum(x["stake"] for x in mine) > p["room"]:
+                    raise BotError(f"{p['name']}: 確認した金額の合計がこのパネルの今使える金額 ({p['room']:,}円) を超えるので止めます。"
+                                   "もう一度確認してください")
+                items += mine
+            pl["items"] = items
+            buy, used = [], 0
+            for x in items:
+                if balance is None or used + x["stake"] <= balance:
+                    buy.append(x)
+                    used += x["stake"]
+            pl["buy"] = buy
+        return pl
+
+    def go(self, pw):
+        on = [(i, p) for i, p in enumerate(self.s["panels"], 1) if p.get("on")]
+        self.log(f"開始 [版 {VERSION}] ({'テスト: 購入の直前で止めます' if self.mode == 'test' else '本番: 購入まで行います'})"
+                 f"・入金の上限 (オンのパネルの1回の金額の合計) {self.s['cap']:,}円"
+                 + f"・投票パネル {'、'.join(str(i) for i, _ in on) or 'なし'}")
+        for k, label in (("memberNo", "加入者番号"), ("pin", "暗証番号"), ("authPassword", "認証用パスワード"), ("betPassword", "投票用パスワード")):
+            if not store.get_secret(k):
+                raise BotError(f"{label}が設定されていません (設定で保存してください)")
+        self.step = "予想を読む"
+        try:
+            rows = fetch_predictions(self.date).get("rows", [])
+        except Exception as e:
+            raise BotError(f"今日 ({self.date}) の予想が読めませんでした: {e}")
+        state = store.load_state(self.date)
+        pl = self.make_plan(rows, state)
+        if self.only is not None:
+            gone = len(set(self.only) - {item_id(x) for x in pl["items"]})
+            self.log(f"確認した買い目 {len(self.only)}点だけを買います" + (f" (締切が近い・予想から消えたなどで {gone}点は買いません)" if gone else ""))
+        for p in pl["panels"]:
+            if not p["on"]:
+                continue
+            what = "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円" for x in p["want"])
+            self.log(f"{p['name']}: {p['strategy']}・今回使う {p['total']:,}円・買う {len(p['want'])}点 ({what})・"
+                     f"締切済み {len(p['closed'])}点・今日買った {len(p['bought'])}点 ({p['spent']:,}円)" + (f" ({p['note']})" if p["note"] else ""),
+                     [p["panel"]])
+        self.log(f"今回使える金額 (オンのパネルの合計) {pl['room']:,}円・今日買った {state.get('spent', 0):,}円")
+        if not pl["items"]:
+            self.log("買う買い目がありません")
+            return
+
+        browser = self.launch(pw)
+        try:
+            ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ja-JP")
+            self.login(ctx)
+            self.step = "開催一覧"
+            self.wait_until(lambda: self.is_vis("#currentBetLimitAmount"), "ログイン後の画面が出ません", 40)
+            self.shot("01_top")
+            bal = self.balance()
+            self.log(f"購入限度額 (残高) {bal:,}円")
+            pl = self.make_plan(rows, state, bal)
+            need = sum(x["stake"] for x in pl["items"])
+            if bal < need:
+                if self.mode != "live" or not self.s.get("deposit", True):
+                    self.log(f"残高が {need - bal:,}円 足りません ({'テストなので入金しません' if self.mode != 'live' else '自動入金がオフ'})")
+                    if self.mode != "live":
+                        pl["buy"] = pl["items"]  # テストは残高に関係なく入れてみる
+                else:
+                    self.deposit_for(need, bal, state)
+                    bal = self.balance()
+                    pl = self.make_plan(rows, state, bal)
+            if not pl["buy"]:
+                self.log("残高が無いので買いません")
+                return
+            # 同じ舟券を2つのパネルで買うときは、1点にまとめて金額を足す (記録はパネルごと)
+            groups = {}
+            for x in pl["buy"]:
+                g = groups.setdefault(x["key"], dict(x, stake=0, parts=[]))
+                g["stake"] += x["stake"]
+                g["parts"].append(x)
+            buy = sorted(groups.values(), key=lambda x: (min(p["panel"] for p in x["parts"]), -x.get("score", x["ev"])))
+            self.log("買う順: " + "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円"
+                                            f"(パネル{'・'.join(str(p['panel']) for p in x['parts'])})" for x in buy))
+            self.step = "投票画面"
+            first = buy[0]
+            self.click(f"#jyo{first['jcd']} a", f"開催一覧の{first['venue']}")
+            self.wait_until(lambda: "/betcom/" in self.page.url or self.is_vis("#betkati1"), "投票画面が開きません", 30)
+            added = []
+            for x in buy:
+                self.check_stop()
+                self.ctx = sorted({p["panel"] for p in x["parts"]})  # この舟券を選んだパネルのログ・画面写真にする
+                try:
+                    self.with_retry(self.add_bet, x)
+                    added.append(x)
+                    self.log(f"ベットリストに入れました {x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円")
+                except BotError as e:
+                    self.log(f"入れられませんでした {x['venue']}{x['rno']}R {tname(x)}: {e}")
+                    self.close_popups()
+                finally:
+                    self.ctx = None
+            self.shot("10_betlist")
+            if not added:
+                raise BotError("ベットリストに1点も入りませんでした")
+            count, total = self.bet_count(), self.total_amount()
+            self.log(f"ベットリスト {count}点・合計 {total:,}円")
+            want_total = sum(x["stake"] for x in added)
+            if total != want_total:
+                raise BotError(f"合計 {total:,}円 が入れた分 ({want_total:,}円) と合わないので止めます")
+            if total > pl["room"]:
+                raise BotError(f"合計 {total:,}円 が今日の残りの上限 {pl['room']:,}円 を超えるので止めます")
+            self.step = "投票入力完了"
+            self.click("#betList .btnSubmit a", "「投票入力完了」")
+            self.confirm(added, total, state, pl["room"])
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+
+    def launch(self, pw):
+        args = {"headless": bool(self.s.get("headless", True))}
+        if os.name == "nt":
+            try:
+                return pw.chromium.launch(channel="msedge", **args)
+            except Exception as e:
+                self.log(f"Edge を起動できなかったので Chrome で動かします ({e})")
+                return pw.chromium.launch(channel="chrome", **args)
+        exe = os.environ.get("TELEBOAT_CHROMIUM")  # テスト用
+        return pw.chromium.launch(executable_path=exe, **args) if exe else pw.chromium.launch(**args)
+
+    def login(self, ctx):
+        self.step = "ログイン"
+        page = ctx.new_page()
+        self.page = page
+        page.goto(TOP_URL, wait_until="domcontentloaded", timeout=60000)
+        self.wait_until(lambda: self.is_vis("#memberNo"), "ログイン画面が出ません", 30)
+        # 受付時間外 (早朝など) はログイン欄が押せない (disabled) ままになる。待ってもだめなら受付時間外として止める
+        box = page.locator("#memberNo").first
+        end = time.time() + 8
+        while not box.is_enabled() and time.time() < end:
+            time.sleep(1)
+        if not box.is_enabled():
+            try:
+                text = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=3000))
+                hit = re.search(r"[^。]{0,40}(時間|受付|ご利用)[^。]{0,40}", text)
+                info = (hit.group(0) if hit else text[:80]).strip()
+            except Exception:
+                info = ""
+            self.shot("00_login_closed")
+            raise Closed("テレボートの受付時間外のようです (ログイン欄が使えません)" + (f"。画面の表示: {info}" if info else ""))
+        self.type_in("#memberNo", store.get_secret("memberNo"), "加入者番号", secret=True)
+        self.type_in("#pin", store.get_secret("pin"), "暗証番号", secret=True)
+        self.type_in("#authPassword", store.get_secret("authPassword"), "認証用パスワード", secret=True)
+        self.pause()
+        with ctx.expect_page(timeout=40000) as info:
+            page.locator("#loginButton").click()
+        self.log("ログインを押しました")
+        popup = info.value
+        popup.wait_for_load_state("domcontentloaded", timeout=60000)
+        self.page = popup
+        self.log("投票の画面が開きました")
+
+    def balance(self):
+        t = self.page.locator("#currentBetLimitAmount").first.inner_text()
+        v = digits(t)
+        if v is None:
+            raise BotError("購入限度額が読めません")
+        return v
+
+    def close_popups(self):
+        for sel in ("#errorPop #close", "#errorPop #ok", "#closeJyosel a"):
+            try:
+                if self.is_vis(sel):
+                    self.vis(sel).click()
+                    self.pause(1, 1.5)
+            except Exception:
+                pass
+
+    # ---- 入金 ----
+    def deposit_for(self, need, bal, state):
+        # 入金は残高に反映されたのを確かめてから「今日の入金」に記録する。
+        # 指示したがまだ反映されていない分は deposit_pending に置き、二重に入金しないよう上限の計算に含める。
+        pend = state.get("deposit_pending")
+        if pend:
+            if bal >= pend.get("bal_before", 0) + pend["amount"]:
+                state["deposit"] = state.get("deposit", 0) + pend["amount"]
+                self.log(f"前回指示した {pend['amount']:,}円 の入金が残高に反映されていたので記録しました")
+            elif time.time() - pend.get("at", 0) < 3600:
+                self.log(f"前回指示した {pend['amount']:,}円 の入金がまだ反映されていないので、今は入金しません")
+                return
+            else:
+                self.log(f"前回指示した {pend['amount']:,}円 の入金は1時間たっても反映されなかったので、入金できなかったものとして扱います")
+            state.pop("deposit_pending", None)
+            store.save_state(state, self.date)
+        # 入金は1,000円単位。上限が1,000円単位でないとき (例: 900円) に切り捨てると0円になって入金できないので、
+        # 残りの上限を1,000円単位に切り上げる (購入は別に上限で止めるので、上限を超えて買うことはない)
+        left = self.s["cap"] - state.get("deposit", 0)
+        room = math.ceil(left / 1000) * 1000 if left > 0 else 0
+        dep = min(math.ceil((need - bal) / 1000) * 1000, room)
+        if dep <= 0:
+            self.log(f"今日はもう上限まで入金したので入金しません (今日の入金の記録 {state.get('deposit', 0):,}円・1日の上限 {self.s['cap']:,}円。"
+                     "実際には入金されていないときは、パネルの「今日の入金記録を消す」で0円に戻せます)")
+            return
+        self.step = "入金"
+        self.log(f"残高 {bal:,}円 が足りないので {dep:,}円 を入金します")
+        self.open_charge()
+        self.type_in("#chargeInstructAmt", dep // 1000, "入金額 (1,000円単位)")
+        self.type_in("#chargeBetPassword", store.get_secret("betPassword"), "投票用パスワード", secret=True)
+        self.shot("02_deposit")
+        self.click("#executeCharge a", "「入金する」")
+        self.wait_until(lambda: "入金を実行します" in self.popup_text(), "入金の確認が出ません", 20)
+        self.click("#errorPop #ok", "入金確認の OK")
+        # OK を押した時点ではまだ「指示中」。反映を確かめるまで今日の入金には数えない
+        state["deposit_pending"] = {"amount": dep, "bal_before": bal, "at": time.time()}
+        store.save_state(state, self.date)
+        res = {}
+
+        def done():
+            if self.is_vis("#closeChargecomp a"):
+                res["ok"] = True
+                return True
+            t = self.popup_text()
+            if t and "よろしいですか" not in t:
+                res["err"] = t
+                return True
+            return False
+        self.wait_until(done, "入金の結果が出ません", 40)
+        self.shot("03_deposit_result")
+        if res.get("err"):
+            state.pop("deposit_pending", None)
+            store.save_state(state, self.date)
+            raise BotError(f"入金できませんでした: {res['err'][:80]}")
+        self.log(f"{dep:,}円 の入金を指示しました")
+        self.click("#closeChargecomp a", "入金完了の「閉じる」")
+        target = min(need, bal + dep)
+        for i in range(60):  # 30秒ごと、最大30分
+            if self.balance() >= target:
+                state["deposit"] = state.get("deposit", 0) + dep
+                state.pop("deposit_pending", None)
+                store.save_state(state, self.date)
+                self.log(f"残高に反映されました: {self.balance():,}円 (今日の入金 {state['deposit']:,}円)")
+                return
+            if i % 2 == 0:
+                self.log("残高に反映されるのを待っています…")
+            if self.is_vis("#updateBalanceBtn a"):
+                self.click("#updateBalanceBtn a", "残高更新")
+            self.wait(30)
+        raise BotError("30分待っても入金が残高に反映されませんでした")
+
+    def open_charge(self):
+        """「入金・精算」のメニューを開いて「入金する」を押す (メニューの中にあり、ふだんは隠れている)"""
+        self.pause()
+        try:
+            self.page.locator("#gnavi01").first.hover(timeout=5000)
+        except Exception:
+            pass
+        if not self.is_vis("#charge a"):
+            self.pause(0.8, 1.2)
+            try:
+                self.page.locator("#gnavi01").first.click(timeout=5000)
+            except Exception:
+                pass
+        self.pause(0.8, 1.2)
+        if self.is_vis("#charge a"):
+            self.vis("#charge a").click()
+        elif self.page.locator("#charge a").count():
+            self.log("「入金する」が隠れたままなので、直接押します")
+            self.page.locator("#charge a").first.evaluate("(a) => a.click()")
+        else:
+            raise BotError("「入金する」のメニューが見つかりません")
+        self.wait_until(lambda: self.is_vis("#chargeInstructAmt"), "入金の画面が開きません", 15)
+
+    # ---- 投票画面 ----
+    def h2(self):
+        try:
+            return re.sub(r"\s", "", self.page.locator("#boatraceTitle h2").first.inner_text())
+        except Exception:
+            return ""
+
+    def add_bet(self, x):
+        before = self.bet_count()
+        self.select_venue(x["jcd"], x["venue"])
+        self.select_race(x["rno"])
+        bet = x.get("bet", "win")
+        tab, name = {"win": ("betkati1", "単勝"), "tri": ("betkati6", "3連単"), "trio": ("betkati7", "3連複")}[bet]
+        self.select_tab(tab, name)
+        self.select_tab("betway1", "通常投票")
+        boats = re.findall(r"\d", str(x["boat"]))
+        if bet == "win":
+            spots = [(boats[0], 1)]
+        elif bet == "tri" or self.page.locator(f"#regbtn_{boats[1]}_2").count():
+            spots = list(zip(boats, (1, 2, 3)))  # 1着・2着・3着 (3連複も3段のときは 1艇目・2艇目・3艇目)
+        else:
+            spots = [(bt, 1) for bt in boats]  # 3連複で1段だけのときは3艇を選ぶ
+        for bt, row in spots:
+            btn = self.page.locator(f"#regbtn_{bt}_{row}").first
+            self.wait_until(lambda: btn.count() > 0, f"{name}の{bt}号艇 ({row}段目) のボタンがありません", 10)
+            if "miss" in (btn.get_attribute("class") or ""):
+                raise BotError("欠場のため入れられません")
+            self.click(f"#regbtn_{bt}_{row} a", f"{name}の{bt}号艇 ({row}段目) のボタン")
+        self.type_in("#amount", x["stake"] // 100, "金額 (100円単位)")
+        self.wait_until(lambda: "off" not in (self.page.locator("#regAmountBtn").first.get_attribute("class") or ""),
+                        "「ベットリストに追加」が押せません", 10)
+        self.click("#regAmountBtn a", "「ベットリストに追加」")
+        self.wait_until(lambda: self.bet_count() > before, "ベットリストに入ったことを確かめられませんでした", 15)
+        if bet != "win":
+            # 3連単・3連複は、ベットリストに思った組み合わせが入ったかを確かめる。違えば買わずに止める
+            import unicodedata
+            try:
+                text = unicodedata.normalize("NFKC", self.page.locator("#betList").first.inner_text(timeout=3000))
+            except Exception:
+                text = ""
+            pat = r"\D{0,3}".join(boats)
+            if name not in text or not re.search(pat, text):
+                self.shot("11_betlist_check")
+                self.save_html("11_betlist_check")
+                raise WrongBet(f"ベットリストに {name}{x['boat']} が見当たりません。違う舟券が入ったかもしれないので、買わずに止めます"
+                               f" (ベットリスト: {re.sub(chr(92) + 's+', ' ', text)[:120]})")
+
+    def select_venue(self, jcd, venue):
+        venue = JYO.get(jcd, venue)  # 画面の表記に合わせる
+        if self.h2() == venue:
+            return
+        self.click("#boatraceChnage a", "「場変更」")
+        j = self.page.locator(f"#j{jcd}").first
+        self.wait_until(lambda: j.count() > 0 and j.is_visible(), f"{venue}が場変更の一覧にありません", 15)
+        if "end" in (j.locator("xpath=..").get_attribute("class") or ""):
+            self.close_popups()
+            raise BotError(f"{venue}は発売していません")
+        self.pause()
+        j.click()
+        self.click("#jyoChange", "「変更する」")
+        ok_at = [0.0]
+
+        def switched():
+            t = self.popup_text()
+            if "連続して操作" in t:
+                raise BotError("連続して操作された")
+            if t and self.is_vis("#errorPop #ok") and time.time() - ok_at[0] > 3:
+                ok_at[0] = time.time()
+                self.log(f"場変更の確認に OK を押しました: {t[:60]}")
+                self.vis("#errorPop #ok").click()
+            return self.h2() == venue
+        try:
+            self.wait_until(switched, "", 20)
+        except BotError as e:
+            self.shot("err_venue")
+            self.close_popups()
+            raise BotError(f"{venue}に切り替わりませんでした (画面の場名: {self.h2() or 'なし'}) {e}")
+        self.pause(1, 1.5)
+
+    def select_race(self, rno):
+        sel = f"#selRaceNo{rno:02d}"
+        tab = self.page.locator(sel).first
+        self.wait_until(lambda: tab.count() > 0, f"{rno}Rのタブがありません", 10)
+        if "current" in (tab.get_attribute("class") or ""):
+            return
+        self.click(f"{sel} a", f"{rno}R")
+        self.wait_until(lambda: "current" in (tab.get_attribute("class") or ""), f"{rno}Rが選べません (締切済みかもしれません)", 10)
+
+    def select_tab(self, id_, what):
+        tab = self.page.locator(f"#{id_}").first
+        if "current" in (tab.get_attribute("class") or ""):
+            return
+        self.click(f"#{id_} a", what)
+        self.wait_until(lambda: "current" in (tab.get_attribute("class") or ""), f"{what}が選べません", 10)
+
+    def bet_count(self):
+        try:
+            return digits(self.page.locator(".inputCompletion .betNumber strong").first.inner_text(timeout=2000)) or 0
+        except Exception:
+            return 0
+
+    def total_amount(self):
+        try:
+            return digits(self.page.locator("#totalAmount").first.inner_text(timeout=2000)) or 0
+        except Exception:
+            return 0
+
+    # ---- 購入確認画面 ----
+    def describe_page(self):
+        """入力欄とボタンの一覧をログに残す (直すときの手がかり)"""
+        return self.page.evaluate("""() => {
+          const vis = (n) => n.offsetParent !== null;
+          const near = (n) => ((n.closest('tr, li, dl, p, div') || n.parentElement || {}).innerText || '').replace(/\\s+/g, ' ').slice(0, 50);
+          const d = (n) => `${n.tagName.toLowerCase()}#${n.id || '-'}.${String(n.className || '-').replace(/\\s+/g, '.')}` +
+            `[${n.type || ''}${n.name ? ' name=' + n.name : ''}]「${n.type === 'password' ? '' : (n.value || n.textContent || '').trim().slice(0, 20)}」<${near(n)}>`;
+          return {
+            inputs: [...document.querySelectorAll('input, select, textarea')].filter((n) => n.type !== 'hidden' && vis(n)).map(d),
+            buttons: [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
+              .filter((n) => vis(n) && (n.value || n.textContent || '').trim()).map(d).slice(0, 60),
+            text: document.body.innerText.replace(/\\s+/g, ' ').slice(0, 1500),
+          };
+        }""")
+
+    def save_html(self, name):
+        try:
+            html = self.page.evaluate("""() => { const c = document.documentElement.cloneNode(true);
+              c.querySelectorAll('input').forEach((n) => { if (n.type === 'password') n.removeAttribute('value'); });
+              c.querySelectorAll('script').forEach((n) => n.remove()); return c.outerHTML; }""")
+            self.shot_cb(None, name, html=html)
+        except Exception as e:
+            self.log(f"(画面の HTML を残せませんでした: {e})")
+
+    def confirm(self, added, total, state, room):
+        self.step = "購入確認"
+        self.wait_until(lambda: "/betconf" in self.page.url or self.is_vis("input[type=password]"), "購入確認画面が開きません", 30)
+        self.wait(2)
+        self.shot("20_confirm")
+        self.save_html("20_confirm")
+        d = self.describe_page()
+        self.log("購入確認画面の入力欄: " + " / ".join(d["inputs"]))
+        self.log("購入確認画面のボタン: " + " / ".join(d["buttons"][:30]))
+        text = re.sub(r"\s", "", d["text"])
+        if f"{total:,}" not in text:
+            raise BotError(f"合計 {total:,}円 が購入確認画面に見当たらないので止めます")
+        amt = self.page.evaluate("""() => {
+          const vis = (n) => n.offsetParent !== null;
+          const c = [...document.querySelectorAll('input')].filter((n) => vis(n) && !['hidden','checkbox','radio','password','button','submit'].includes(n.type));
+          const m = document.querySelector('input[name=betAmount]') || c.find((n) => /amount|amt|kingaku/i.test(n.id + ' ' + n.name + ' ' + n.className)) ||
+                    c.find((n) => /金額/.test(((n.closest('tr, dl, li, div') || {}).innerText || '')));
+          if (!m) return null;
+          if (!m.id) m.id = 'byosou-amount';
+          const after = ((m.parentElement || {}).innerText || '') + (m.nextSibling ? (m.nextSibling.textContent || '') : '');
+          return {id: m.id, unit: /000\\s*円/.test(after) ? 1000 : /00\\s*円/.test(after) ? 100 : 1, after: after.slice(0, 20)};
+        }""")
+        if amt:
+            if total % amt["unit"]:
+                raise BotError(f"合計 {total}円 を {amt['unit']}円単位で入れられません")
+            self.type_in(f"#{amt['id']}", total // amt["unit"], f"購入金額の確認 ({amt['unit']}円単位・欄の後ろ「{amt['after']}」)")
+        else:
+            self.log("購入金額の確認欄はありませんでした")
+        pw_sel = self.page.evaluate("""() => {
+          const vis = (n) => n.offsetParent !== null;
+          const c = [...document.querySelectorAll('input[type=password]')].filter((n) => vis(n) &&
+            n.getAttribute('tabindex') !== '-1' && !/dummy/i.test(n.name || ''));
+          const m = document.querySelector('input[name=betPassword]') || c.find((n) => /pass/i.test(n.id + ' ' + n.name)) || c[0];
+          if (!m) return null; if (!m.id) m.id = 'byosou-pass'; return '#' + m.id;
+        }""")
+        if not pw_sel:
+            raise BotError("投票用パスワードの欄が見つかりません")
+        self.type_in(pw_sel, store.get_secret("betPassword"), "投票用パスワード", secret=True)
+        self.shot("21_confirm_filled")
+        if self.mode != "live":
+            self.log(f"テストなので、ここで止めます ({len(added)}点・{total:,}円 は買っていません)")
+            return
+        btn = self.page.evaluate("""() => {
+          const vis = (n) => n.offsetParent !== null;
+          const b = [...document.querySelectorAll('a, button, input[type=button], input[type=submit]')]
+            .find((n) => vis(n) && /^投票(する|確定)$/.test((n.value || n.textContent || '').trim()));
+          if (!b) return null; if (!b.id) b.id = 'byosou-buy'; return b.id;
+        }""")
+        if not btn:
+            raise BotError("「投票する」ボタンが見つかりません")
+        # 上限の最後の確かめ
+        if total > room:
+            raise BotError("今日の上限を超えるので止めます")
+        self.log(f"{len(added)}点・{total:,}円 を購入します")
+        self.click(f"#{btn}", "「投票する」")
+        result = {}
+        ok_at = [0.0]
+
+        def record(note):
+            """OK を押したら買ったものとして先に記録する (結果の判定に失敗しても、二重に買ったり上限を超えたりしないため)"""
+            if result.get("recorded"):
+                return
+            result["recorded"] = True
+            state["bought"] = sorted(set(state.get("bought", [])) | {x["key"] for x in added})
+            state["spent"] = state.get("spent", 0) + total
+            at = dt.datetime.now().strftime("%H:%M")
+            state.setdefault("tickets", []).extend(
+                {"key": x["key"], "race_id": x["race_id"], "venue": x["venue"], "rno": x["rno"], "bet": x.get("bet", "win"), "boat": x["boat"],
+                 "deadline": x["deadline"], "stake": x["stake"], "prob": x.get("prob"), "odds": x.get("odds"),
+                 "ev": x.get("ev"), "panel": x["panel"], "strategy": self.s["panels"][x["panel"] - 1].get("strategy", "value"),
+                 "at": at} for g in added for x in g["parts"])
+            store.save_state(state, self.date)
+            self.log(f"{note}: {len(added)}点・{total:,}円 を今日の購入として記録しました (今日の合計 {state['spent']:,}円)")
+            for i in sorted({x["panel"] for g in added for x in g["parts"]}):
+                mine = [x for g in added for x in g["parts"] if x["panel"] == i]
+                self.log("このパネルの購入: " + "、".join(f"{x['venue']}{x['rno']}R {tname(x)} {x['stake']:,}円" for x in mine) +
+                         f" (合計 {sum(x['stake'] for x in mine):,}円)", [i])
+
+        def finished():
+            t = self.popup_text()
+            if "連続して操作" in t and not result.get("recorded"):
+                result["err"] = t
+                return True
+            if self.is_vis("#ok") and time.time() - ok_at[0] > 3 and not result.get("recorded"):
+                ok_at[0] = time.time()
+                self.log(f"購入の確認に OK を押しました: {t[:60]}")
+                self.vis("#ok").click()
+                record("購入を確定しました")
+                return False
+            if t and "エラー" in t:
+                result["err"] = t
+                return True
+            if "/betcomp" in self.page.url:  # 投票完了の画面
+                result["ok"] = True
+                return True
+            body = self.page.locator("body").inner_text()
+            if re.search(r"受け付けました|受付けました|投票完了|購入しました|受付番号|投票を受付|投票受付", body):
+                result["ok"] = True
+                return True
+            return False
+        try:
+            self.wait_until(finished, "購入の結果が出ません", 40)
+        except BotError:
+            if not result.get("recorded"):
+                raise
+            result["unsure"] = True
+        finally:
+            self.shot("30_result")
+            self.save_html("30_result")
+            self.log(f"購入後の画面: {self.page.url.split('?')[0]}")
+        if result.get("err"):
+            if result.get("recorded"):
+                self.log("購入の後にエラーが出ました。テレボートの「照会」で買えたか確かめてください (今日の購入として記録したままにします)")
+            raise BotError(f"購入できませんでした: {result['err'][:100]}")
+        if result.get("unsure"):
+            self.log("購入完了の画面は確かめられませんでしたが、確定の OK は押したので買えているはずです (テレボートの「照会」で確かめられます)")
+        else:
+            self.log(f"購入しました: {len(added)}点・{total:,}円 (今日の合計 {state['spent']:,}円)")
