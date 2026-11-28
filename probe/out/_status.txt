@@ -28,3 +28,9 @@ bc_config.js 200 103
 race_bc.html 200 2689
 bc_race.html 403 3330
 rbc_main.js 200 105664
+bc_hp_18.txt 200 1710
+bc_hp_01.txt 200 1602
+bc_rep_22.txt 403 2992
+bc_rep_22b.txt 403 2992
+bc_rep_2022.txt 403 2992
+bc_hold.json 200 19579
