@@ -1,4 +1,1 @@
-news44414.html https://www.boatrace.jp/owpc/pc/site/news/2025/07/44414/
-bc_config.js https://boatcast.jp/assets/js/config.js
-race_bc.html https://race.boatcast.jp/
-bc_race.html https://boatcast.jp/race/index.html
+rbc_main.js https://race.boatcast.jp/assets/js/main.js
