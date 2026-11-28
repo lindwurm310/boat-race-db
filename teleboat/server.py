@@ -361,6 +361,71 @@ class App:
                 self.check_cache[date] = chk
         return chk
 
+    # ---- 実際のオッズ (締切後の確定オッズ) ----
+    # 単勝は boatrace.jp のオッズのページから、締切の30分後より後に1レース1回だけ読む (odds_final.json に覚える)。
+    # 3連単・3連複は当たった舟券だけ、配当から出す (外れた組み合わせのオッズは読まない)
+    ODDS_FILE = os.path.join(store.BASE, "odds_final.json")
+
+    def final_odds(self):
+        if getattr(self, "_odds", None) is None:
+            try:
+                with open(self.ODDS_FILE, encoding="utf-8") as f:
+                    self._odds = json.load(f)
+            except (OSError, ValueError):
+                self._odds = {}
+        return self._odds
+
+    def fill_final_odds(self, limit=20):
+        """まだ実際のオッズが無い単勝の舟券のレースを、少しずつ読む (自動実行の確認のついでに。1回に最大 limit レース)"""
+        if self.running():
+            return
+        cache = self.final_odds()
+        now = dt.datetime.now()
+        want = []
+        for date in sorted(store.state_dates(), reverse=True)[:60]:
+            for t in store.day_tickets(store.load_state(date), date):
+                rid = t.get("race_id")
+                if not rid or t.get("bet", "win") != "win" or rid in want:
+                    continue
+                c = cache.get(rid)
+                if c and (c.get("odds") or time.time() - c.get("failed_at", 0) < 3 * 3600 or c.get("tries", 0) >= 5):
+                    continue
+                try:
+                    dl = dt.datetime.combine(dt.date.fromisoformat(date), dt.time.fromisoformat(t.get("deadline") or "23:59"))
+                except ValueError:
+                    continue
+                if now >= dl + dt.timedelta(minutes=30):
+                    want.append(rid)
+        changed = False
+        for rid in want[:limit]:
+            c = cache.setdefault(rid, {})
+            try:
+                odds = bot.fetch_final_odds(rid)
+                if odds:
+                    c.clear()
+                    c["odds"] = odds
+                else:
+                    c.update(failed_at=time.time(), tries=c.get("tries", 0) + 1)
+            except Exception:
+                c.update(failed_at=time.time(), tries=c.get("tries", 0) + 1)
+            changed = True
+            time.sleep(2)  # 相手のサイトに負担をかけない
+        if changed:
+            with open(self.ODDS_FILE + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(cache, f, ensure_ascii=False)
+            os.replace(self.ODDS_FILE + ".tmp", self.ODDS_FILE)
+
+    def _odds_job(self):
+        if getattr(self, "_odds_busy", False):
+            return
+        self._odds_busy = True
+        try:
+            self.fill_final_odds()
+        except Exception as e:
+            self.log(f"実際のオッズを読むところでエラー: {e}")
+        finally:
+            self._odds_busy = False
+
     def settle(self, date, tickets):
         """舟券ごとに 結果・払戻 を入れる"""
         chk = self.check(date) or {}
@@ -396,6 +461,14 @@ class App:
                     t["odds_paid"] = pay if win else None
                     t["payout"] = int(pay * t["stake"] / 100) if win else 0
                     t["settled"] = True
+            # 実際のオッズと実際の期待値 (1着確率 × 実際のオッズ)
+            real = None
+            if t.get("win") and t.get("odds_paid"):
+                real = t["odds_paid"] / 100
+            elif t.get("bet", "win") == "win":
+                real = ((self.final_odds().get(t["race_id"]) or {}).get("odds") or {}).get(str(t["boat"]))
+            t["odds_real"] = real
+            t["ev_real"] = round(t["prob"] * real, 3) if real and t.get("prob") is not None else None
             out.append(t)
         return out
 
@@ -444,48 +517,179 @@ class App:
         return {"days": out, "total": tot, "months": [dict(v, month=k) for k, v in sorted(months.items(), reverse=True)]}
 
     def export(self, panel=None, fmt="csv"):
-        """収支の記録を表にする (Excel・Google スプレッドシートで開ける)。返す: (ファイル名, 中身, Content-Type)"""
+        """収支の記録を表にする (Excel・Google スプレッドシートで開ける)。返す: (ファイル名, 中身, Content-Type)
+        Excel は「まとめ」(回収率・投資・回収を大きく、グラフ)・「舟券」・「日ごと」・「月ごと」・(全部のときは)「パネルごと」"""
         r = self.results(panel, days=100000)
-        head = ["日付", "投票パネル", "選び方", "場", "R", "締切", "券種", "買い目", "金額", "確率", "予想オッズ", "期待値", "結果", "着順", "払戻", "収支", "買った時刻"]
-        rows = []
+        head = ["日付", "投票パネル", "選び方", "場", "R", "締切", "券種", "買い目", "金額", "確率", "予想オッズ", "予想の期待値",
+                "実際のオッズ", "実際の期待値", "結果", "着順", "払戻", "収支", "買った時刻"]
+        tickets = []
         for d in sorted(r["days"], key=lambda d: d["date"]):
             for t in d["tickets"]:
-                rows.append([d["date"], t.get("panel_name") or f"投票パネル{t['panel']}",
-                             bot.STRATEGIES.get(t.get("strategy") or "", "").split(" (")[0], t.get("venue", ""), t.get("rno"),
-                             t.get("deadline", ""), bot.BET_NAME.get(t.get("bet", "win"), "単勝"),
-                             int(t["boat"]) if str(t["boat"]).isdigit() else str(t["boat"]), t["stake"],
-                             None if t.get("prob") is None else round(t["prob"], 3),
-                             None if t.get("odds") is None else round(t["odds"], 1),
-                             None if t.get("ev") is None else round(t["ev"], 2),
-                             t["result"], t.get("finish") or "", t["payout"] if t["settled"] else None,
-                             t["payout"] - t["stake"] if t["settled"] else None, t.get("at", "")])
-        mhead = ["月", "購入", "払戻", "収支 (結果が出た分)", "回収率", "的中", "点数", "結果待ち"]
-        mrows = [[m["month"], m["stake"], m["payout"], m["payout"] - m["settled"],
-                  round(m["payout"] / m["settled"], 3) if m["settled"] else None, m["hit"], m["n"], m["pending"]]
-                 for m in sorted(r["months"], key=lambda m: m["month"])]
-        t = r["total"]
-        mrows.append(["合計", t["stake"], t["payout"], t["payout"] - t["settled"],
-                      round(t["payout"] / t["settled"], 3) if t["settled"] else None, t["hit"], t["n"], t["pending"]])
+                tickets.append((d["date"], t))
+
+        def r1(v, n):
+            return None if v is None else round(v, n)
+
+        def trow(date, t):
+            return [date, t.get("panel_name") or f"投票パネル{t['panel']}",
+                    bot.STRATEGIES.get(t.get("strategy") or "", "").split(" (")[0], t.get("venue", ""), t.get("rno"),
+                    t.get("deadline", ""), bot.BET_NAME.get(t.get("bet", "win"), "単勝"),
+                    int(t["boat"]) if str(t["boat"]).isdigit() else str(t["boat"]), t["stake"],
+                    r1(t.get("prob"), 3), r1(t.get("odds"), 1), r1(t.get("ev"), 2) if t.get("ev") else None,
+                    r1(t.get("odds_real"), 1), r1(t.get("ev_real"), 2),
+                    t["result"], t.get("finish") or "", t["payout"] if t["settled"] else None,
+                    t["payout"] - t["stake"] if t["settled"] else None, t.get("at", "")]
         name = f"teleboat_{'panel' + str(panel) if panel else 'all'}_{store.today()}"
         if fmt == "xlsx":
-            import xlsx
-            return name + ".xlsx", xlsx.book([("舟券", [head] + rows), ("月ごと", [mhead] + mrows)]), \
+            return name + ".xlsx", self.export_xlsx(r, panel, head, [(d, t, trow(d, t)) for d, t in tickets]), \
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         import csv
         import io
         buf = io.StringIO()
         w = csv.writer(buf, lineterminator="\r\n")
         w.writerow(head)
-        w.writerows(["" if v is None else v for v in row] for row in rows)
+        w.writerows(["" if v is None else v for v in trow(d, t)] for d, t in tickets)
         return name + ".csv", ("\ufeff" + buf.getvalue()).encode("utf-8"), "text/csv; charset=utf-8"
+
+    def export_xlsx(self, r, panel, head, trows):
+        import xlsx
+        from xlsx import Cell as C, Chart, Sheet, book, BLUE, GREEN, NAVY
+        tot = r["total"]
+        roi = tot["payout"] / tot["settled"] if tot["settled"] else None
+        profit = tot["payout"] - tot["settled"]
+        s = store.load_settings()
+        title = store.panel_name(s["panels"][panel - 1], panel) if panel else "全部の投票パネル"
+
+        def money(v, st="yen"):
+            if v is None:
+                return None
+            if st == "syen":
+                return C(v, "plus" if v > 0 else "minus" if v < 0 else "yen")
+            return C(v, st)
+
+        def ratio(v):
+            return None if v is None else C(round(v, 4), "pct_good" if v >= 1 else "pct_bad")
+
+        # ---- 舟券 (結果で色分け) ----
+        ti = {k: i for i, k in enumerate(head)}
+        rows = [head]
+        for _, t, row in trows:
+            base = "hit" if t.get("win") and t["settled"] else "wait" if not t["settled"] else ""
+            sfx = "@" + base if base else ""
+            out = []
+            for k, v in zip(head, row):
+                if k in ("金額", "払戻"):
+                    out.append(money(v))
+                elif k == "収支":
+                    out.append(money(v, "syen"))
+                elif k == "確率":
+                    out.append(None if v is None else C(v, "pct"))
+                elif k in ("予想の期待値", "実際の期待値"):
+                    out.append(None if v is None else C(v, "f2_good" if v >= 1 else "f2"))
+                elif k in ("予想オッズ", "実際のオッズ"):
+                    out.append(None if v is None else C(v, "f1"))
+                elif k == "結果":
+                    out.append(C(v, base) if base else v)
+                else:
+                    out.append(v)
+            if sfx:  # 当たりの行は薄い緑、結果待ちの行は薄い灰色
+                out = [C(c.v, c.s + sfx if c.s + sfx in xlsx.STYLES else c.s) if isinstance(c, C) else C(c, sfx[1:] if c is None else sfx)
+                       for c in out]
+            rows.append(out)
+        sh_t = Sheet("舟券", rows, widths={ti["選び方"]: 14, ti["結果"]: 16})
+
+        # ---- 日ごと (累計の収支つき) ----
+        drows = [["日付", "購入", "払戻", "収支 (結果が出た分)", "累計の収支", "回収率", "的中", "点数", "結果待ち"]]
+        run = 0
+        for d in sorted(r["days"], key=lambda d: d["date"]):
+            p = d["payout"] - d["settled"]
+            run += p
+            drows.append([d["date"], money(d["stake"]), money(d["payout"]), money(p, "syen"), money(run, "syen"),
+                          ratio(d["payout"] / d["settled"]) if d["settled"] else None, d["hit"], d["n"], d["pending"]])
+        nd = len(drows) - 1
+        sh_d = Sheet("日ごと", drows)
+
+        # ---- 月ごと ----
+        mrows = [["月", "購入", "払戻", "収支 (結果が出た分)", "回収率", "的中", "点数", "結果待ち"]]
+        for m in sorted(r["months"], key=lambda m: m["month"]):
+            mrows.append([m["month"], money(m["stake"]), money(m["payout"]), money(m["payout"] - m["settled"], "syen"),
+                          ratio(m["payout"] / m["settled"]) if m["settled"] else None, m["hit"], m["n"], m["pending"]])
+        nm = len(mrows) - 1
+        mrows.append([C("合計", "total"), C(tot["stake"], "total_yen"), C(tot["payout"], "total_yen"), C(profit, "total_syen"),
+                      C(round(roi, 4), "total_pct") if roi is not None else C(None, "total"), C(tot["hit"], "total"),
+                      C(tot["n"], "total"), C(tot["pending"], "total")])
+        sh_m = Sheet("月ごと", mrows)
+
+        # ---- パネルごと (全部のとき) ----
+        extra = []
+        prow = []
+        if not panel:
+            by = {}
+            for _, t, _row in trows:
+                b = by.setdefault(t["panel"], {"name": t.get("panel_name") or f"投票パネル{t['panel']}", "stake": 0, "settled": 0, "payout": 0, "hit": 0, "n": 0})
+                b["stake"] += t["stake"]
+                b["n"] += 1
+                if t["settled"]:
+                    b["settled"] += t["stake"]
+                    b["payout"] += t["payout"]
+                    b["hit"] += bool(t.get("win"))
+            for i in sorted(by):
+                b = by[i]
+                prow.append([b["name"], money(b["stake"]), money(b["payout"]), money(b["payout"] - b["settled"], "syen"),
+                             ratio(b["payout"] / b["settled"]) if b["settled"] else None, b["hit"], b["n"]])
+            extra = [Sheet("パネルごと", [["投票パネル", "購入", "払戻", "収支 (結果が出た分)", "回収率", "的中", "点数"]] + prow)]
+
+        # ---- まとめ (大きな数字・グラフ) ----
+        settled_n = sum(1 for _, t, _ in trows if t["settled"])
+        hits = sum(1 for _, t, _ in trows if t["settled"] and t.get("win"))
+        evs = [t["ev_real"] for _, t, _ in trows if t.get("ev_real") is not None]
+        sm = [
+            [C(f"自動投票の収支　{title}", "title")],
+            [C(f"{store.today()} に出力。回収率と収支は、答え合わせ (翌朝) が出た舟券だけで計算しています。", "sub")],
+            [],
+            [C("回収率", "label"), None, C("投資 (購入)", "label"), None, C("回収 (払戻)", "label"), None, C("収支", "label"), None],
+            [C(round(roi, 4) if roi is not None else "まだ結果なし", "big_pct" if roi is not None else "big_text"), None,
+             C(tot["stake"], "big_yen"), None, C(tot["payout"], "big_yen"), None,
+             C(profit, "big_plus" if profit >= 0 else "big_minus"), None],
+            [C("払戻 ÷ 結果が出た購入", "card"), None, C(f"{tot['n']}点", "card"), None,
+             C(f"的中 {hits} / {settled_n}点" + (f" ({hits / settled_n:.0%})" if settled_n else ""), "card"), None,
+             C(f"結果待ち {tot['pending']}点", "card"), None],
+            [],
+            [C("実際の期待値の平均 (実際のオッズが分かった舟券)", "h2"), None, None, None,
+             C(round(sum(evs) / len(evs), 2) if evs else "-", "f2_good" if evs and sum(evs) / len(evs) >= 1 else "f2")],
+            [],
+        ]
+        merges = ["A1:H1", "A2:H2"] + [f"{c1}{r}:{c2}{r}" for r in (4, 5, 6) for c1, c2 in (("A", "B"), ("C", "D"), ("E", "F"), ("G", "H"))] + ["A8:D8"]
+        if prow:
+            sm.append([C("投票パネルごと", "h2")])
+            sm.append([C(h, "head") for h in ["投票パネル", "購入", "払戻", "収支", "回収率", "的中", "点数"]])
+            sm += prow
+            sm.append([])
+        charts = []
+        top = len(sm)
+        if nd:
+            charts.append(Chart("line", "累計の収支 (日ごと)", "日ごと", f"A2:A{nd + 1}", [("累計の収支", f"E2:E{nd + 1}", BLUE)],
+                                (0, top, 8, top + 16)))
+            charts.append(Chart("bar", "日ごとの購入と払戻", "日ごと", f"A2:A{nd + 1}",
+                                [("購入", f"B2:B{nd + 1}", "9CA3AF"), ("払戻", f"C2:C{nd + 1}", GREEN)], (0, top + 17, 8, top + 33)))
+        if nm:
+            charts.append(Chart("bar", "月ごとの回収率", "月ごと", f"A2:A{nm + 1}", [("回収率", f"E2:E{nm + 1}", NAVY)],
+                                (9, top, 16, top + 16), pct=True))
+        sh_s = Sheet("まとめ", sm, head=False, freeze=0, widths={i: 13 for i in range(8)}, merges=merges,
+                     heights={1: 30, 5: 44}, charts=charts)
+        return book([sh_s, sh_t, sh_d, sh_m] + extra)
 
     def scheduler(self):
         """パネルごとに、毎日 そのパネルの時刻に1回だけ実行する (時刻を過ぎてから起きても 2 時間以内なら実行)"""
+        last_odds = 0
         while True:
             try:
                 self.due_retries()
             except Exception as e:
                 self.log(f"受付待ちのやり直しでエラー: {e}")
+            if time.time() - last_odds > 600:  # 10分ごとに、実際のオッズを少しずつ読む
+                last_odds = time.time()
+                threading.Thread(target=self._odds_job, daemon=True).start()
             try:
                 s = store.load_settings()
                 now = dt.datetime.now()
