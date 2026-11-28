@@ -19,3 +19,7 @@ odds3t_2021.html 200 13935
 odds3t_2022.html 200 45721
 boatcast_top.html 200 25821
 boatcast_www.html 000 0
+bc_common.js 200 5580
+bc_top.js 200 19614
+bc_live.html 200 12081
+bc_schedule.html 200 5048
