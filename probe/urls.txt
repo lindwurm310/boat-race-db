@@ -1,1 +1,6 @@
-rbc_main.js https://race.boatcast.jp/assets/js/main.js
+bc_hp_18.txt https://race.boatcast.jp/hp_txt/18/bc_j_str3_20261128_18_01.txt
+bc_hp_01.txt https://race.boatcast.jp/hp_txt/01/bc_j_str3_20261128_01_01.txt
+bc_rep_22.txt https://race.boatcast.jp/txt/replay/2026/22/bc_j_str3_20260801_22_01.txt
+bc_rep_22b.txt https://race.boatcast.jp/txt/replay/2026/22/bc_j_str3_20260801_22_1.txt
+bc_rep_2022.txt https://race.boatcast.jp/txt/replay/2022/22/bc_j_str3_20220301_22_01.txt
+bc_hold.json https://race.boatcast.jp/api_txt/getHoldingList2_20261128.json

@@ -1,0 +1,42 @@
+name: odds-live
+# 毎日、締切の 30・20・10・5・3・1 分前のオッズ (全券種) を記録して Release odds-live に置く。
+# 1回の実行は 6 時間までなので、1日を 3 つに分けて動かす (GitHub の予定実行は数分〜十数分遅れることがある)。
+on:
+  schedule:
+    - cron: "40 22 * * *"   # 日本時間 07:40 → 07:45〜13:15 に取る予定の分
+    - cron: "10 4 * * *"    # 日本時間 13:10 → 13:15〜18:45
+    - cron: "40 9 * * *"    # 日本時間 18:40 → 18:45〜23:59
+  workflow_dispatch:
+    inputs:
+      from: {description: "開始 (HH:MM 日本時間)", default: "00:00"}
+      to: {description: "終了 (HH:MM 日本時間)", default: "23:59"}
+permissions:
+  contents: write
+env:
+  TZ: Asia/Tokyo
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: w
+        run: |
+          H=$(date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then F="${{ inputs.from }}"; T="${{ inputs.to }}"; P=m$(date +%H%M)
+          elif [ "$H" -lt 12 ]; then F=07:45; T=13:15; P=1
+          elif [ "$H" -lt 18 ]; then F=13:15; T=18:45; P=2
+          else F=18:45; T=23:59; P=3; fi
+          echo "from=$F" >> "$GITHUB_OUTPUT"; echo "to=$T" >> "$GITHUB_OUTPUT"
+          echo "file=odds_live_$(date +%Y%m%d)_$P.jsonl.gz" >> "$GITHUB_OUTPUT"
+      - run: python analysis/more/odds_live.py --out ${{ steps.w.outputs.file }} --from ${{ steps.w.outputs.from }} --to ${{ steps.w.outputs.to }}
+      - name: Release に置く
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view odds-live --repo ${{ github.repository }} >/dev/null 2>&1 || gh release create odds-live --repo ${{ github.repository }} --prerelease --title "締切前のオッズの動き (毎日)" --notes "analysis/more/odds_live.py で記録した、締切の 30・20・10・5・3・1 分前のオッズ" --target ${{ github.sha }} || true
+          [ -s "${{ steps.w.outputs.file }}" ] && gh release upload odds-live "${{ steps.w.outputs.file }}" --repo ${{ github.repository }} --clobber
