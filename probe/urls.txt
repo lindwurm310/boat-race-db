@@ -1,0 +1,13 @@
+oddstf.html https://www.boatrace.jp/owpc/pc/race/oddstf?rno=1&jcd=03&hd=20240115
+odds2tf.html https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=1&jcd=03&hd=20240115
+oddsk.html https://www.boatrace.jp/owpc/pc/race/oddsk?rno=1&jcd=03&hd=20240115
+odds3t.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20240115
+odds3f.html https://www.boatrace.jp/owpc/pc/race/odds3f?rno=1&jcd=03&hd=20240115
+odds3t_2016.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20160115
+racelist.html https://www.boatrace.jp/owpc/pc/race/racelist?rno=1&jcd=03&hd=20240115
+index_today.html https://www.boatrace.jp/owpc/pc/race/index
+download.html https://www.boatrace.jp/owpc/pc/extra/data/download.html
+tide_2024_TK.txt https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/txt/2024/TK.txt
+tide_2016_TK.txt https://www.data.jma.go.jp/kaiyou/data/db/tide/suisan/txt/2016/TK.txt
+tide_station.html https://www.data.jma.go.jp/kaiyou/db/tide/suisan/station.php
+stadium03.html https://www.boatrace.jp/owpc/pc/extra/data/stadium/index.html?jcd=03
