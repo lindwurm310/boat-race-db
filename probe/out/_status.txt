@@ -23,3 +23,7 @@ bc_common.js 200 5580
 bc_top.js 200 19614
 bc_live.html 200 12081
 bc_schedule.html 200 5048
+news44414.html 200 41133
+bc_config.js 200 103
+race_bc.html 200 2689
+bc_race.html 403 3330
