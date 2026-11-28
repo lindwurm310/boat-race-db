@@ -1,0 +1,52 @@
+name: odds-history
+# 過去レースの確定オッズ (全券種・全組み合わせ) を集める。analysis/more/odds_run.json を変えて push すると動く。
+# 1ジョブは1秒に1回までアクセス。同時に動かすのは odds_run.json の parallel 個まで。
+# 時間切れで残ったレースは、同じ odds_run.json をもう一度 push すると続きから取る (Release の同じファイルを読み直す)。
+on:
+  push:
+    branches: [claude/project-thread-0z3396]
+    paths: [analysis/more/odds_run.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.p.outputs.chunks }}
+      parallel: ${{ steps.p.outputs.parallel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          echo "chunks=$(jq -c .chunks analysis/more/odds_run.json)" >> "$GITHUB_OUTPUT"
+          echo "parallel=$(jq -c .parallel analysis/more/odds_run.json)" >> "$GITHUB_OUTPUT"
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      max-parallel: ${{ fromJson(needs.plan.outputs.parallel) }}
+      fail-fast: false
+      matrix:
+        c: ${{ fromJson(needs.plan.outputs.chunks) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      F: odds_${{ matrix.c.s }}.jsonl.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas
+      - name: 前に取った分 (あれば)
+        run: gh release download odds-history --repo ${{ github.repository }} --pattern "$F" --output prev.jsonl.gz || true
+      - id: run
+        run: python analysis/more/collect_odds.py --races analysis/extra/races_2021-10-25.csv.gz --start ${{ matrix.c.s }} --end ${{ matrix.c.e }} --out "$F" --resume prev.jsonl.gz --minutes 320 ${{ matrix.c.limit && format('--limit {0}', matrix.c.limit) || '' }}
+      - name: 見本を表示
+        run: zcat "$F" | head -c 1500; echo
+      - name: Release (検証用データ置き場) に置く
+        if: always()
+        run: |
+          gh release view odds-history --repo ${{ github.repository }} >/dev/null 2>&1 || gh release create odds-history --repo ${{ github.repository }} --prerelease --title "検証用: 過去の確定オッズ (全券種)" --notes "analysis/more/collect_odds.py で集めた締切時オッズ" --target ${{ github.sha }} || true
+          [ -s "$F" ] && gh release upload odds-history "$F" --repo ${{ github.repository }} --clobber
