@@ -1,0 +1,34 @@
+name: more-data
+# 追加データ (ファン手帳・潮位・直前情報の水面気象) を取って Release more-data に置く。analysis/more/more_run.txt を変えて push すると動く。
+on:
+  push:
+    branches: [claude/project-thread-0z3396]
+    paths: [analysis/more/more_run.txt]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas lhafile
+      - name: ファン手帳 (レーサー期別成績、2002年〜)
+        run: python analysis/more/fan.py --out fan.csv.gz
+      - name: 潮位 (気象庁の推算潮位、2002〜2027年)
+        run: python analysis/more/tide.py --start 2002 --end 2027 --out tide_hourly.csv.gz --hl tide_hilo.csv.gz
+      - name: 直前情報の水面気象 (気温・水温・風向)
+        run: |
+          mkdir bi && gh release download bi-history --repo ${{ github.repository }} --pattern 'bi_*.jsonl.gz' --dir bi
+          python analysis/more/parse_weather.py bi/bi_*.jsonl.gz --out weather_bi.csv.gz
+      - name: Release に置く
+        if: always()
+        run: |
+          gh release view more-data --repo ${{ github.repository }} >/dev/null 2>&1 || gh release create more-data --repo ${{ github.repository }} --prerelease --title "検証用: 追加データ (ファン手帳・潮位・気温水温)" --notes "analysis/more の fan.py・tide.py・parse_weather.py の出力" --target ${{ github.sha }} || true
+          for f in fan.csv.gz tide_hourly.csv.gz tide_hilo.csv.gz weather_bi.csv.gz; do [ -s $f ] && gh release upload more-data $f --repo ${{ github.repository }} --clobber; done
