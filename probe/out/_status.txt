@@ -1,0 +1,13 @@
+oddstf.html 200 35183
+odds2tf.html 200 40244
+oddsk.html 200 35108
+odds3t.html 200 46279
+odds3f.html 200 39635
+odds3t_2016.html 200 13938
+racelist.html 200 68174
+index_today.html 200 63279
+download.html 200 31918
+tide_2024_TK.txt 200 50142
+tide_2016_TK.txt 200 50142
+tide_station.html 200 103933
+stadium03.html 200 43846
