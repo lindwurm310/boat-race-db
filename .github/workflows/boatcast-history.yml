@@ -1,0 +1,52 @@
+name: boatcast-history
+# BOATCAST のオリジナル展示・確定票数を過去レースの分まで集める。analysis/more/bc_run.json を変えて push すると動く。
+# 1ジョブは1秒に1回までアクセス。同時に動かすのは odds_run.json の parallel 個まで。
+# 時間切れで残ったレースは、同じ odds_run.json をもう一度 push すると続きから取る (Release の同じファイルを読み直す)。
+on:
+  push:
+    branches: [claude/project-thread-0z3396]
+    paths: [analysis/more/bc_run.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      chunks: ${{ steps.p.outputs.chunks }}
+      parallel: ${{ steps.p.outputs.parallel }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: |
+          echo "chunks=$(jq -c .chunks analysis/more/bc_run.json)" >> "$GITHUB_OUTPUT"
+          echo "parallel=$(jq -c .parallel analysis/more/bc_run.json)" >> "$GITHUB_OUTPUT"
+  collect:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      max-parallel: ${{ fromJson(needs.plan.outputs.parallel) }}
+      fail-fast: false
+      matrix:
+        c: ${{ fromJson(needs.plan.outputs.chunks) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      F: bc_${{ matrix.c.s }}.jsonl.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas
+      - name: 前に取った分 (あれば)
+        run: gh release download boatcast-history --repo ${{ github.repository }} --pattern "$F" --output prev.jsonl.gz || true
+      - id: run
+        run: python analysis/more/collect_boatcast.py --races analysis/extra/races_2021-10-25.csv.gz --start ${{ matrix.c.s }} --end ${{ matrix.c.e }} --out "$F" --resume prev.jsonl.gz --minutes 320 ${{ matrix.c.limit && format('--limit {0}', matrix.c.limit) || '' }}
+      - name: 見本を表示
+        run: zcat "$F" | head -c 1500; echo
+      - name: Release (検証用データ置き場) に置く
+        if: always()
+        run: |
+          gh release view boatcast-history --repo ${{ github.repository }} >/dev/null 2>&1 || gh release create boatcast-history --repo ${{ github.repository }} --prerelease --title "検証用: BOATCAST のオリジナル展示・確定票数" --notes "analysis/more/collect_boatcast.py で集めた BOATCAST のファイル (タブ区切りの文字のまま)" --target ${{ github.sha }} || true
+          [ -s "$F" ] && gh release upload boatcast-history "$F" --repo ${{ github.repository }} --clobber
