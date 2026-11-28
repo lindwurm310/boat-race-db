@@ -27,3 +27,4 @@ news44414.html 200 41133
 bc_config.js 200 103
 race_bc.html 200 2689
 bc_race.html 403 3330
+rbc_main.js 200 105664
