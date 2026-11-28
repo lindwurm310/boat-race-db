@@ -25,7 +25,7 @@ TOP_URL = os.environ.get("TELEBOAT_URL", "https://ib.mbrace.or.jp/")  # テス�
 CHECK_URL = os.environ.get("TELEBOAT_CHECK_URL", "https://lindwurm310.github.io/boat-race-db/data/check/{date}.json")  # 答え合わせ (翌朝できる)
 PRED_URL = os.environ.get("TELEBOAT_PRED_URL", "https://lindwurm310.github.io/boat-race-db/data/predictions/{date}.json")
 MARGIN_MIN = 3  # 締切まで3分を切ったレースは買わない
-VERSION = "2026-11-27a"  # ログの最初に出す (更新が入ったかを確かめるため)
+VERSION = "2026-11-28a"  # ログの最初に出す (更新が入ったかを確かめるため)
 # テレボートの画面に出る場名 (予想の「琵琶湖」は画面では「びわこ」)
 JYO = dict(zip([f"{i:02d}" for i in range(1, 25)], "桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split()))
 
@@ -58,6 +58,28 @@ def fetch_check(date):
         if e.code == 404:
             return None
         raise
+
+
+ODDS_URL = os.environ.get("TELEBOAT_ODDS_URL", "https://www.boatrace.jp/owpc/pc/race/oddstf?rno={rno}&jcd={jcd}&hd={hd}")
+
+
+def fetch_final_odds(race_id):
+    """締切後の確定した単勝オッズ {"1": 1.5, ...} (boatrace.jp のオッズのページ。欠場などは入らない)"""
+    d8, jcd, rno = race_id.split("-")
+    url = ODDS_URL.format(rno=int(rno), jcd=jcd, hd=d8)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (boatrace-teleboat; low-rate)"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        html = r.read().decode("utf-8", "replace")
+    i, j = html.find("単勝オッズ"), html.find("複勝オッズ")
+    if i < 0:
+        return {}
+    part = html[i:j if j > i else None]
+    out = {}
+    for lane, o in re.findall(r'is-boatColor(\d)">\d</td>.*?<td class="oddsPoint[^"]*">([^<]*)</td>', part, re.S):
+        v = _num(o.replace("&nbsp;", "").strip())
+        if v:
+            out[lane] = v
+    return out
 
 
 def fetch_predictions(date):
