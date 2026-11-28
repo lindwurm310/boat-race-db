@@ -1,8 +1,4 @@
-layout.html https://www.boatrace.jp/owpc/pc/extra/data/layout.html
-fan2604.lzh https://www.boatrace.jp/static_extra/pc_static/download/data/kibetsu/fan2604.lzh
-odds3t_2018.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20180115
-odds3t_2020.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20200115
-odds3t_2021.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20210115
-odds3t_2022.html https://www.boatrace.jp/owpc/pc/race/odds3t?rno=1&jcd=03&hd=20220115
-boatcast_top.html https://boatcast.jp/
-boatcast_www.html https://www.boatcast.jp/
+bc_common.js https://boatcast.jp/assets/js/common.js
+bc_top.js https://boatcast.jp/assets/js/top.js
+bc_live.html https://boatcast.jp/live/020194.html
+bc_schedule.html https://boatcast.jp/schedule/index.html
